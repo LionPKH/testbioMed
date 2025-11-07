@@ -1,0 +1,32 @@
+{% extends 'base.html' %}
+
+{% block title %}Отправить задачу{% endblock %}
+
+{% block content %}
+<div class="card" style="max-width: 600px; margin: 80px auto;">
+    <h2 style="margin-bottom: 30px; color: #333; text-align: center;">Новая вычислительная задача</h2>
+    
+    <p style="text-align: center; color: #666; margin-bottom: 30px;">
+        Введите данные для расчета в поле ниже.
+    </p>
+
+    <form method="post">
+        {% csrf_token %}
+        
+        <div class="form-group">
+            <label for="id_task_input">{{ form.task_input.label }}:</label>
+            {{ form.task_input }}
+            {% if form.task_input.help_text %}
+                <small style="color: #666; display: block; margin-top: 5px;">{{ form.task_input.help_text }}</small>
+            {% endif %}
+            {% if form.task_input.errors %}
+                <span style="color: red; font-size: 14px; display: block; margin-top: 5px;">{{ form.task_input.errors.0 }}</span>
+            {% endif %}
+        </div>
+        
+        <button type="submit" class="btn btn-primary" style="width: 100%; margin-top: 20px;">
+            Отправить на выполнение
+        </button>
+    </form>
+</div>
+{% endblock %}

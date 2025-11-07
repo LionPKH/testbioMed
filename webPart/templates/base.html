@@ -142,39 +142,49 @@
     </style>
 </head>
 <body>
-    <div class="container">
-        {% if user.is_authenticated %}
-        <nav class="navbar">
-            <div>
-                <strong>Привет, {{ user.username }}!</strong>
-                <span style="color: #888; margin-left: 10px;">
+{% if messages %}
+<div class="messages" style="padding: 0 20px; max-width: 1200px; margin: 20px auto 0;">
+    {% for message in messages %}
+    <div class="alert alert-{{ message.tags }}" role="alert"
+         style="background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; padding: 15px; border-radius: 8px; margin-bottom: 15px;">
+        {{ message }}
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+<div class="container">
+    {% if user.is_authenticated %}
+    <nav class="navbar">
+        <div>
+            <strong>Привет, {{ user.username }}!</strong>
+            <span style="color: #888; margin-left: 10px;">
                     ({{ user.get_user_type_display }})
                 </span>
-            </div>
-            <div>
-                {% if user.user_type == 'admin' %}
-                    <a href="{% url 'admin_dashboard' %}">Панель управления</a>
-                    <a href="{% url 'admin_profile_edit' %}">Настройки профиля</a>
-                {% else %}
-                    <a href="{% url 'user_dashboard' %}">Мой профиль</a>
-                    <a href="{% url 'user_profile_edit' %}">Редактировать</a>
-                {% endif %}
-                <a href="{% url 'logout' %}">Выйти</a>
-            </div>
-        </nav>
-        {% endif %}
-        
-        {% if messages %}
-        <div class="messages">
-            {% for message in messages %}
-            <div class="alert alert-{{ message.tags }}">
-                {{ message }}
-            </div>
-            {% endfor %}
         </div>
-        {% endif %}
-        
-        {% block content %}{% endblock %}
+        <div>
+            {% if user.user_type == 'admin' %}
+            <a href="{% url 'admin_dashboard' %}">Панель управления</a>
+            <a href="{% url 'admin_profile_edit' %}">Настройки профиля</a>
+            {% else %}
+            <a href="{% url 'user_dashboard' %}">Мой профиль</a>
+            <a href="{% url 'user_profile_edit' %}">Редактировать</a>
+            {% endif %}
+            <a href="{% url 'logout' %}">Выйти</a>
+        </div>
+    </nav>
+    {% endif %}
+
+    {% if messages %}
+    <div class="messages">
+        {% for message in messages %}
+        <div class="alert alert-{{ message.tags }}">
+            {{ message }}
+        </div>
+        {% endfor %}
     </div>
+    {% endif %}
+
+    {% block content %}{% endblock %}
+</div>
 </body>
 </html>

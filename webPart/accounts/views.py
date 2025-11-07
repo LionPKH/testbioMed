@@ -4,6 +4,13 @@ from django.contrib.auth.decorators import login_required, user_passes_test
 from django.contrib import messages
 from .forms import UserRegistrationForm, AdminProfileForm, OrdinaryUserProfileForm
 from .models import User
+from django.contrib.auth.decorators import login_required
+from .forms import TaskSubmissionForm
+import uuid
+import json
+from django.contrib import messages
+from django.utils import timezone
+
 
 
 def is_admin(user):
@@ -121,3 +128,45 @@ def user_profile_edit(request):
 
 def access_denied(request):
     return render(request, 'accounts/access_denied.html', status=403)
+
+
+@login_required
+def submit_task_view(request):
+    """
+    Отображает страницу для отправки задачи и обрабатывает отправку,
+    формируя JSON-объект.
+    """
+    if request.method == 'POST':
+        form = TaskSubmissionForm(request.POST)
+        if form.is_valid():
+            user = request.user
+            task_data = form.cleaned_data['task_input']
+            task_id = str(uuid.uuid4())
+
+            # Собираем все данные в словарь Python
+            task_dict = {
+                'task_id': task_id,
+                'submitted_by': {
+                    'username': user.username,
+                    'email': user.email,
+                    'user_id_in_app': user.id
+                },
+                'user_type': user.user_type,
+                'task_payload': task_data,
+                'timestamp_utc': timezone.now().isoformat()
+            }
+
+            # Преобразуем словарь в JSON-строку
+            json_output = json.dumps(task_dict, indent=4, ensure_ascii=False)
+
+            # Выводим результат в консоль
+            print("----------- НОВАЯ ЗАДАЧА -----------")
+            print(json_output)
+            print("---------------------------------")
+
+            messages.success(request, f"Задача с ID {task_id} успешно отправлена на обработку!")
+            return redirect('user_dashboard')
+    else:
+        form = TaskSubmissionForm()
+
+    return render(request, 'accounts/submit_task.html', {'form': form})

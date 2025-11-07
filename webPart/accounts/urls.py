@@ -16,4 +16,5 @@ urlpatterns = [
 
     # Access denied
     path('access-denied/', views.access_denied, name='access_denied'),
+    path('submit/', views.submit_task_view, name='submit_task'),
 ]

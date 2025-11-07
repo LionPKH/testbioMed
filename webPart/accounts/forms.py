@@ -26,3 +26,14 @@ class OrdinaryUserProfileForm(forms.ModelForm):
             'birth_date': forms.DateInput(attrs={'type': 'date'}),
             'bio': forms.Textarea(attrs={'rows': 4}),
         }
+
+class TaskSubmissionForm(forms.Form):
+    """
+    Форма для отправки новой задачи через текстовое поле.
+    """
+    task_input = forms.CharField(
+        label="Данные для задачи",
+        required=True,
+        widget=forms.TextInput(attrs={'placeholder': 'Например, sin(x) + cos(2*x)'}),
+        help_text="Введите функцию или параметры для вычисления."
+    )
