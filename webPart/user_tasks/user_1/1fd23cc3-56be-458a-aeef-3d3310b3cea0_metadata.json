@@ -1,0 +1,13 @@
+{
+    "task_id": "1fd23cc3-56be-458a-aeef-3d3310b3cea0",
+    "submitted_by": {
+        "username": "admin",
+        "email": "admin@admin.com",
+        "user_id_in_app": 1
+    },
+    "user_type": "ordinary",
+    "task_payload": "1fd23cc3-56be-458a-aeef-3d3310b3cea0_script.py",
+    "file_path": "/Users/petr/PycharmProjects/BioMedProject/webPart/user_tasks/user_1/1fd23cc3-56be-458a-aeef-3d3310b3cea0_script.py",
+    "original_filename": "script.py",
+    "timestamp_utc": "2025-11-07T14:31:46.094311+00:00"
+}

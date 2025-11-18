@@ -60,11 +60,116 @@
         </div>
     </div>
     
-    <div style="margin-top: 30px;">
+    <!-- Статистика задач -->
+    {% if statistics %}
+    <div style="margin-top: 30px; background: #f8f9fa; padding: 25px; border-radius: 10px;">
+        <h2 style="color: #333; margin-bottom: 20px;">📊 Статистика задач</h2>
+        
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 15px; margin-bottom: 20px;">
+            <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 15px; border-radius: 8px; color: white; text-align: center;">
+                <div style="font-size: 28px; font-weight: bold;">{{ statistics.total_tasks|default:0 }}</div>
+                <div style="margin-top: 5px; font-size: 14px;">Всего задач</div>
+            </div>
+            
+            <div style="background: linear-gradient(135deg, #56ab2f 0%, #a8e063 100%); padding: 15px; border-radius: 8px; color: white; text-align: center;">
+                <div style="font-size: 28px; font-weight: bold;">{{ statistics.completed_tasks|default:0 }}</div>
+                <div style="margin-top: 5px; font-size: 14px;">✓ Выполнено</div>
+            </div>
+            
+            <div style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); padding: 15px; border-radius: 8px; color: white; text-align: center;">
+                <div style="font-size: 28px; font-weight: bold;">{{ statistics.failed_tasks|default:0 }}</div>
+                <div style="margin-top: 5px; font-size: 14px;">✗ Ошибки</div>
+            </div>
+            
+            <div style="background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%); padding: 15px; border-radius: 8px; color: white; text-align: center;">
+                <div style="font-size: 28px; font-weight: bold;">{{ statistics.running_tasks|default:0 }}</div>
+                <div style="margin-top: 5px; font-size: 14px;">▶ В процессе</div>
+            </div>
+            
+            <div style="background: linear-gradient(135deg, #ffa751 0%, #ffe259 100%); padding: 15px; border-radius: 8px; color: white; text-align: center;">
+                <div style="font-size: 28px; font-weight: bold;">{{ statistics.pending_tasks|default:0 }}</div>
+                <div style="margin-top: 5px; font-size: 14px;">⏳ В очереди</div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+    
+    <!-- Последние задачи -->
+    {% if recent_tasks %}
+    <div style="margin-top: 30px; background: #f8f9fa; padding: 25px; border-radius: 10px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+            <h2 style="color: #333; margin: 0;">📋 Последние задачи</h2>
+            <a href="{% url 'my_tasks' %}" style="color: #667eea; text-decoration: none; font-weight: 500;">
+                Посмотреть все →
+            </a>
+        </div>
+        
+        <div style="overflow-x: auto;">
+            <table style="width: 100%; border-collapse: collapse;">
+                <thead>
+                    <tr style="background: #667eea; color: white;">
+                        <th style="padding: 10px; text-align: left; border: 1px solid #ddd;">Файл</th>
+                        <th style="padding: 10px; text-align: left; border: 1px solid #ddd;">Создано</th>
+                        <th style="padding: 10px; text-align: center; border: 1px solid #ddd;">Статус</th>
+                        <th style="padding: 10px; text-align: center; border: 1px solid #ddd;">Действия</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for task in recent_tasks %}
+                    <tr style="border-bottom: 1px solid #ddd; {% if forloop.counter|divisibleby:2 %}background: #ffffff;{% else %}background: #f8f9fa;{% endif %}">
+                        <td style="padding: 10px; border: 1px solid #ddd;">
+                            <strong>{{ task.original_filename }}</strong>
+                        </td>
+                        <td style="padding: 10px; border: 1px solid #ddd;">
+                            {{ task.timestamp_utc|date:"d.m.Y H:i" }}
+                        </td>
+                        <td style="padding: 10px; text-align: center; border: 1px solid #ddd;">
+                            {% if task.status == 'completed' %}
+                                <span style="background: #28a745; color: white; padding: 4px 8px; border-radius: 4px; font-size: 11px;">
+                                    ✓ Выполнено
+                                </span>
+                            {% elif task.status == 'failed' %}
+                                <span style="background: #dc3545; color: white; padding: 4px 8px; border-radius: 4px; font-size: 11px;">
+                                    ✗ Ошибка
+                                </span>
+                            {% elif task.status == 'running' %}
+                                <span style="background: #17a2b8; color: white; padding: 4px 8px; border-radius: 4px; font-size: 11px;">
+                                    ▶ Выполняется
+                                </span>
+                            {% elif task.status == 'pending' %}
+                                <span style="background: #ffc107; color: #333; padding: 4px 8px; border-radius: 4px; font-size: 11px;">
+                                    ⏳ В очереди
+                                </span>
+                            {% else %}
+                                <span style="background: #e0e0e0; color: #333; padding: 4px 8px; border-radius: 4px; font-size: 11px;">
+                                    — Нет результата
+                                </span>
+                            {% endif %}
+                        </td>
+                        <td style="padding: 10px; text-align: center; border: 1px solid #ddd;">
+                            <a href="{% url 'task_detail' task.task_id %}" 
+                               style="color: #667eea; text-decoration: none; font-size: 13px;">
+                                👁 Подробнее
+                            </a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% endif %}
+    
+    <div style="margin-top: 30px; display: flex; gap: 10px; flex-wrap: wrap;">
         <a href="{% url 'user_profile_edit' %}" class="btn btn-primary">
             Редактировать профиль
         </a>
-        <a href="{% url 'submit_task' %}" class="btn btn-secondary">Новая задача</a>
+        <a href="{% url 'submit_task' %}" class="btn btn-secondary">
+            ➕ Новая задача
+        </a>
+        <a href="{% url 'my_tasks' %}" class="btn btn-secondary">
+            📋 Все задачи
+        </a>
     </div>
 </div>
 {% endblock %}

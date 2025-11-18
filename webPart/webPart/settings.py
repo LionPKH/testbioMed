@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 
 from pathlib import Path
+import os
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -73,12 +74,54 @@ WSGI_APPLICATION = 'webPart.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
+# ============================================
+# ВАРИАНТ 1: SQLite (по умолчанию, для разработки)
+# ============================================
+# DATABASES = {
+#     'default': {
+#         'ENGINE': 'django.db.backends.sqlite3',
+#         'NAME': BASE_DIR / 'db.sqlite3',
+#     }
+# }
+
+# ============================================
+# ВАРИАНТ 2: PostgreSQL (рекомендуется)
+# ============================================
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': 'postgres',
+        'USER': 'petr',
+        'PASSWORD': os.environ.get('DB_PASSWORD', '123'),  # Используйте переменную окружения!
+        'HOST': os.environ.get('DB_HOST', 'localhost'),
+        'PORT': os.environ.get('DB_PORT', '5432'),
+        'CONN_MAX_AGE': 600,
+        'OPTIONS': {
+            'connect_timeout': 10,
+        }
     }
 }
+
+# ============================================
+# ВАРИАНТ 3: Использование обеих баз данных
+# ============================================
+# DATABASES = {
+#     'default': {  # SQLite для Django таблиц (User, Session, etc.)
+#         'ENGINE': 'django.db.backends.sqlite3',
+#         'NAME': BASE_DIR / 'db.sqlite3',
+#     },
+#     'tasks_db': {  # PostgreSQL для задач
+#         'ENGINE': 'django.db.backends.postgresql',
+#         'NAME': 'python_tasks_db',
+#         'USER': 'postgres',
+#         'PASSWORD': 'your_password',
+#         'HOST': 'localhost',
+#         'PORT': '5432',
+#     }
+# }
+
+# Database routers (если используете несколько БД)
+# DATABASE_ROUTERS = ['webPart.db_routers.TasksRouter']
 
 
 # Password validation
@@ -103,7 +146,7 @@ AUTH_PASSWORD_VALIDATORS = [
 # Internationalization
 # https://docs.djangoproject.com/en/5.2/topics/i18n/
 
-LANGUAGE_CODE = 'en-us'
+LANGUAGE_CODE = 'ru-RU'
 
 TIME_ZONE = 'UTC'
 
@@ -132,3 +175,12 @@ LOGOUT_REDIRECT_URL = 'login'
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+# ============================================
+# Настройки для загрузки файлов
+# ============================================
+# Максимальный размер загружаемого файла (5 MB)
+DATA_UPLOAD_MAX_MEMORY_SIZE = 5242880  # 5 MB
+
+# Максимальный размер всего запроса (10 MB)
+FILE_UPLOAD_MAX_MEMORY_SIZE = 10485760  # 10 MB

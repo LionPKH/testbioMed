@@ -3,30 +3,149 @@
 {% block title %}Отправить задачу{% endblock %}
 
 {% block content %}
-<div class="card" style="max-width: 600px; margin: 80px auto;">
-    <h2 style="margin-bottom: 30px; color: #333; text-align: center;">Новая вычислительная задача</h2>
+<div class="card" style="max-width: 900px; margin: 40px auto;">
+    <h2 style="margin-bottom: 30px; color: #333; text-align: center;">
+        🐍 Новая вычислительная задача (Python)
+    </h2>
     
     <p style="text-align: center; color: #666; margin-bottom: 30px;">
-        Введите данные для расчета в поле ниже.
+        Введите Python код или загрузите готовый .py файл для выполнения.
     </p>
 
-    <form method="post">
+    <form method="post" enctype="multipart/form-data">
         {% csrf_token %}
         
+        <!-- Поле для имени файла -->
         <div class="form-group">
-            <label for="id_task_input">{{ form.task_input.label }}:</label>
-            {{ form.task_input }}
-            {% if form.task_input.help_text %}
-                <small style="color: #666; display: block; margin-top: 5px;">{{ form.task_input.help_text }}</small>
+            <label for="id_filename">{{ form.filename.label }}:</label>
+            {{ form.filename }}
+            {% if form.filename.help_text %}
+                <small style="color: #666; display: block; margin-top: 5px;">{{ form.filename.help_text }}</small>
             {% endif %}
-            {% if form.task_input.errors %}
-                <span style="color: red; font-size: 14px; display: block; margin-top: 5px;">{{ form.task_input.errors.0 }}</span>
+            {% if form.filename.errors %}
+                <span style="color: red; font-size: 14px; display: block; margin-top: 5px;">{{ form.filename.errors.0 }}</span>
             {% endif %}
         </div>
+
+        <!-- Поле для ввода Python кода -->
+        <div class="form-group">
+            <label for="id_python_code">{{ form.python_code.label }}:</label>
+            {{ form.python_code }}
+            {% if form.python_code.help_text %}
+                <small style="color: #666; display: block; margin-top: 5px;">{{ form.python_code.help_text }}</small>
+            {% endif %}
+            {% if form.python_code.errors %}
+                <span style="color: red; font-size: 14px; display: block; margin-top: 5px;">{{ form.python_code.errors.0 }}</span>
+            {% endif %}
+        </div>
+
+        <!-- Разделитель -->
+        <div style="text-align: center; margin: 30px 0; color: #999; font-weight: bold;">
+            ИЛИ
+        </div>
+
+        <!-- Поле для загрузки файла -->
+        <div class="form-group">
+            <label for="id_python_file">{{ form.python_file.label }}:</label>
+            <div style="border: 2px dashed #667eea; border-radius: 8px; padding: 20px; text-align: center; background: #f8f9fa;">
+                {{ form.python_file }}
+                <p style="margin-top: 10px; color: #666;">
+                    📁 Перетащите файл сюда или нажмите для выбора
+                </p>
+            </div>
+            {% if form.python_file.help_text %}
+                <small style="color: #666; display: block; margin-top: 5px;">{{ form.python_file.help_text }}</small>
+            {% endif %}
+            {% if form.python_file.errors %}
+                <span style="color: red; font-size: 14px; display: block; margin-top: 5px;">{{ form.python_file.errors.0 }}</span>
+            {% endif %}
+        </div>
+
+        <!-- Общие ошибки формы -->
+        {% if form.non_field_errors %}
+            <div style="background: #f8d7da; color: #721c24; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+                {% for error in form.non_field_errors %}
+                    <p style="margin: 0;">❌ {{ error }}</p>
+                {% endfor %}
+            </div>
+        {% endif %}
         
-        <button type="submit" class="btn btn-primary" style="width: 100%; margin-top: 20px;">
-            Отправить на выполнение
+        <!-- Кнопка отправки -->
+        <button type="submit" class="btn btn-primary" style="width: 100%; margin-top: 20px; padding: 15px; font-size: 18px;">
+            ▶️ Отправить на выполнение
         </button>
     </form>
+
+    <!-- Информационный блок -->
+    <div style="margin-top: 30px; padding: 20px; background: #e7f3ff; border-left: 4px solid #667eea; border-radius: 8px;">
+        <h3 style="color: #333; margin-bottom: 10px;">💡 Подсказка:</h3>
+        <ul style="color: #555; line-height: 1.8;">
+            <li>Вы можете либо написать код в текстовом поле, либо загрузить готовый .py файл</li>
+            <li>Если загружен файл, он будет использован вместо текста из поля</li>
+            <li>Все файлы сохраняются с уникальным ID для отслеживания</li>
+            <li>Убедитесь, что название файла имеет расширение .py</li>
+        </ul>
+    </div>
 </div>
+
+<style>
+    /* Стилизация текстового поля для кода */
+    #id_python_code {
+        font-family: 'Courier New', Consolas, monospace;
+        font-size: 14px;
+        line-height: 1.5;
+        background: #1e1e1e;
+        color: #d4d4d4;
+        border: 2px solid #667eea;
+        padding: 15px;
+        border-radius: 8px;
+    }
+    
+    #id_python_code:focus {
+        outline: none;
+        border-color: #764ba2;
+        box-shadow: 0 0 10px rgba(102, 126, 234, 0.3);
+    }
+    
+    /* Стилизация поля загрузки файла */
+    #id_python_file {
+        padding: 10px;
+        cursor: pointer;
+    }
+    
+    /* Стилизация поля имени файла */
+    #id_filename {
+        font-family: 'Courier New', Consolas, monospace;
+        font-weight: bold;
+        color: #333;
+    }
+</style>
+
+<script>
+    // Скрипт для изменения названия файла при загрузке
+    document.getElementById('id_python_file').addEventListener('change', function(e) {
+        if (this.files && this.files[0]) {
+            const filename = this.files[0].name;
+            document.getElementById('id_filename').value = filename;
+        }
+    });
+    
+    // Подсветка зоны при перетаскивании файла
+    const dropZone = document.querySelector('div[style*="dashed"]');
+    
+    ['dragenter', 'dragover'].forEach(eventName => {
+        dropZone.addEventListener(eventName, function(e) {
+            e.preventDefault();
+            this.style.background = '#e7f3ff';
+            this.style.borderColor = '#764ba2';
+        });
+    });
+    
+    ['dragleave', 'drop'].forEach(eventName => {
+        dropZone.addEventListener(eventName, function(e) {
+            this.style.background = '#f8f9fa';
+            this.style.borderColor = '#667eea';
+        });
+    });
+</script>
 {% endblock %}

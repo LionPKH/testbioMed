@@ -1,0 +1,169 @@
+{% extends 'base.html' %}
+
+{% block title %}Мои задачи{% endblock %}
+
+{% block content %}
+<div class="card">
+    <h1 style="color: #333; margin-bottom: 30px;">
+        📋 Мои задачи
+    </h1>
+    
+    <!-- Статистика -->
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-bottom: 30px;">
+        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px; border-radius: 10px; color: white; text-align: center;">
+            <div style="font-size: 32px; font-weight: bold;">{{ statistics.total_tasks|default:0 }}</div>
+            <div style="margin-top: 5px;">Всего задач</div>
+        </div>
+        
+        <div style="background: linear-gradient(135deg, #56ab2f 0%, #a8e063 100%); padding: 20px; border-radius: 10px; color: white; text-align: center;">
+            <div style="font-size: 32px; font-weight: bold;">{{ statistics.completed_tasks|default:0 }}</div>
+            <div style="margin-top: 5px;">✓ Выполнено</div>
+        </div>
+        
+        <div style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); padding: 20px; border-radius: 10px; color: white; text-align: center;">
+            <div style="font-size: 32px; font-weight: bold;">{{ statistics.failed_tasks|default:0 }}</div>
+            <div style="margin-top: 5px;">✗ Ошибки</div>
+        </div>
+        
+        <div style="background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%); padding: 20px; border-radius: 10px; color: white; text-align: center;">
+            <div style="font-size: 32px; font-weight: bold;">{{ statistics.running_tasks|default:0 }}</div>
+            <div style="margin-top: 5px;">▶ В процессе</div>
+        </div>
+        
+        <div style="background: linear-gradient(135deg, #ffa751 0%, #ffe259 100%); padding: 20px; border-radius: 10px; color: white; text-align: center;">
+            <div style="font-size: 32px; font-weight: bold;">{{ statistics.pending_tasks|default:0 }}</div>
+            <div style="margin-top: 5px;">⏳ В очереди</div>
+        </div>
+        
+        {% if statistics.avg_execution_time %}
+        <div style="background: linear-gradient(135deg, #a18cd1 0%, #fbc2eb 100%); padding: 20px; border-radius: 10px; color: white; text-align: center;">
+            <div style="font-size: 32px; font-weight: bold;">{{ statistics.avg_execution_time }}с</div>
+            <div style="margin-top: 5px;">⏱ Среднее время</div>
+        </div>
+        {% endif %}
+    </div>
+    
+    <!-- Кнопка создания новой задачи -->
+    <div style="margin-bottom: 20px;">
+        <a href="{% url 'submit_task' %}" class="btn btn-primary" style="display: inline-block;">
+            ➕ Создать новую задачу
+        </a>
+    </div>
+    
+    <!-- Список задач -->
+    {% if tasks %}
+        <div style="background: #f8f9fa; padding: 20px; border-radius: 10px;">
+            <h2 style="color: #333; margin-bottom: 20px;">Список задач</h2>
+            
+            <div style="overflow-x: auto;">
+                <table style="width: 100%; border-collapse: collapse;">
+                    <thead>
+                        <tr style="background: #667eea; color: white;">
+                            <th style="padding: 12px; text-align: left; border: 1px solid #ddd;">Файл</th>
+                            <th style="padding: 12px; text-align: left; border: 1px solid #ddd;">Создано</th>
+                            <th style="padding: 12px; text-align: center; border: 1px solid #ddd;">Статус</th>
+                            <th style="padding: 12px; text-align: center; border: 1px solid #ddd;">Время</th>
+                            <th style="padding: 12px; text-align: center; border: 1px solid #ddd;">Действия</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for task in tasks %}
+                        <tr style="border-bottom: 1px solid #ddd; {% if forloop.counter|divisibleby:2 %}background: #ffffff;{% else %}background: #f8f9fa;{% endif %}">
+                            <td style="padding: 12px; border: 1px solid #ddd;">
+                                <strong>{{ task.original_filename }}</strong>
+                                <br>
+                                <small style="color: #666;">{{ task.task_payload }}</small>
+                            </td>
+                            <td style="padding: 12px; border: 1px solid #ddd;">
+                                {{ task.timestamp_utc|date:"d.m.Y H:i" }}
+                            </td>
+                            <td style="padding: 12px; text-align: center; border: 1px solid #ddd;">
+                                {% if task.status == 'completed' %}
+                                    <span style="background: #28a745; color: white; padding: 5px 10px; border-radius: 5px; font-size: 12px;">
+                                        ✓ Выполнено
+                                    </span>
+                                {% elif task.status == 'failed' %}
+                                    <span style="background: #dc3545; color: white; padding: 5px 10px; border-radius: 5px; font-size: 12px;">
+                                        ✗ Ошибка
+                                    </span>
+                                {% elif task.status == 'running' %}
+                                    <span style="background: #17a2b8; color: white; padding: 5px 10px; border-radius: 5px; font-size: 12px;">
+                                        ▶ Выполняется
+                                    </span>
+                                {% elif task.status == 'pending' %}
+                                    <span style="background: #ffc107; color: #333; padding: 5px 10px; border-radius: 5px; font-size: 12px;">
+                                        ⏳ В очереди
+                                    </span>
+                                {% elif task.status == 'error' %}
+                                    <span style="background: #6c757d; color: white; padding: 5px 10px; border-radius: 5px; font-size: 12px;">
+                                        ⚠ Ошибка
+                                    </span>
+                                {% else %}
+                                    <span style="background: #e0e0e0; color: #333; padding: 5px 10px; border-radius: 5px; font-size: 12px;">
+                                        ⏸ Нет результата
+                                    </span>
+                                {% endif %}
+                            </td>
+                            <td style="padding: 12px; text-align: center; border: 1px solid #ddd;">
+                                {% if task.execution_time_seconds %}
+                                    {{ task.execution_time_seconds }}с
+                                {% else %}
+                                    —
+                                {% endif %}
+                            </td>
+                            <td style="padding: 12px; text-align: center; border: 1px solid #ddd;">
+                                <a href="{% url 'task_detail' task.task_id %}" 
+                                   class="btn btn-secondary" 
+                                   style="padding: 5px 15px; font-size: 14px; text-decoration: none;">
+                                    👁 Подробнее
+                                </a>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            
+            <!-- Пагинация -->
+            {% if tasks.has_other_pages %}
+            <div style="margin-top: 20px; text-align: center;">
+                <div style="display: inline-block;">
+                    {% if tasks.has_previous %}
+                        <a href="?page=1" style="padding: 8px 12px; margin: 0 2px; background: #667eea; color: white; text-decoration: none; border-radius: 5px;">
+                            ««
+                        </a>
+                        <a href="?page={{ tasks.previous_page_number }}" style="padding: 8px 12px; margin: 0 2px; background: #667eea; color: white; text-decoration: none; border-radius: 5px;">
+                            «
+                        </a>
+                    {% endif %}
+                    
+                    <span style="padding: 8px 12px; margin: 0 5px; color: #333;">
+                        Страница {{ tasks.number }} из {{ tasks.paginator.num_pages }}
+                    </span>
+                    
+                    {% if tasks.has_next %}
+                        <a href="?page={{ tasks.next_page_number }}" style="padding: 8px 12px; margin: 0 2px; background: #667eea; color: white; text-decoration: none; border-radius: 5px;">
+                            »
+                        </a>
+                        <a href="?page={{ tasks.paginator.num_pages }}" style="padding: 8px 12px; margin: 0 2px; background: #667eea; color: white; text-decoration: none; border-radius: 5px;">
+                            »»
+                        </a>
+                    {% endif %}
+                </div>
+            </div>
+            {% endif %}
+        </div>
+    {% else %}
+        <div style="text-align: center; padding: 60px 20px; background: #f8f9fa; border-radius: 10px;">
+            <div style="font-size: 80px; margin-bottom: 20px;">📝</div>
+            <h2 style="color: #666; margin-bottom: 20px;">У вас пока нет задач</h2>
+            <p style="color: #999; margin-bottom: 30px;">
+                Создайте свою первую задачу, чтобы начать работу!
+            </p>
+            <a href="{% url 'submit_task' %}" class="btn btn-primary" style="font-size: 18px; padding: 15px 30px;">
+                ➕ Создать первую задачу
+            </a>
+        </div>
+    {% endif %}
+</div>
+{% endblock %}

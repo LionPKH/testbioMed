@@ -1,0 +1,181 @@
+{% extends 'base.html' %}
+
+{% block title %}Задача: {{ task.original_filename }}{% endblock %}
+
+{% block content %}
+<div class="card">
+    <!-- Навигация назад -->
+    <div style="margin-bottom: 20px;">
+        <a href="{% url 'my_tasks' %}" style="color: #667eea; text-decoration: none;">
+            ← Назад к списку задач
+        </a>
+    </div>
+    
+    <!-- Заголовок -->
+    <h1 style="color: #333; margin-bottom: 10px;">
+        📄 {{ task.original_filename }}
+    </h1>
+    <p style="color: #666; margin-bottom: 30px;">
+        ID задачи: <code>{{ task.task_id }}</code>
+    </p>
+    
+    <!-- Основная информация -->
+    <div style="background: #f8f9fa; padding: 25px; border-radius: 10px; margin-bottom: 30px;">
+        <h2 style="color: #333; margin-bottom: 20px;">Информация о задаче</h2>
+        
+        <div style="display: grid; grid-template-columns: 200px 1fr; gap: 15px;">
+            <strong>Файл на диске:</strong>
+            <span><code>{{ task.task_payload }}</code></span>
+            
+            <strong>Путь к файлу:</strong>
+            <span style="word-break: break-all;"><code>{{ task.file_path }}</code></span>
+            
+            <strong>Дата создания:</strong>
+            <span>{{ task.timestamp_utc|date:"d.m.Y H:i:s" }}</span>
+            
+            <strong>Дата обновления:</strong>
+            <span>{{ task.updated_at|date:"d.m.Y H:i:s" }}</span>
+        </div>
+    </div>
+    
+    <!-- Python код -->
+    <div style="background: #1e1e1e; padding: 25px; border-radius: 10px; margin-bottom: 30px;">
+        <h2 style="color: #d4d4d4; margin-bottom: 20px;">Python код</h2>
+        <pre style="color: #d4d4d4; font-family: 'Courier New', monospace; overflow-x: auto; margin: 0; line-height: 1.5;"><code>{{ task.python_code }}</code></pre>
+    </div>
+    
+    <!-- Результаты выполнения -->
+    <div style="background: #f8f9fa; padding: 25px; border-radius: 10px; margin-bottom: 30px;">
+        <h2 style="color: #333; margin-bottom: 20px;">
+            История выполнения 
+            {% if results %}
+                <span style="color: #666; font-size: 16px;">({{ results|length }} запуск{% if results|length > 1 %}ов{% elif results|length == 1 %}{% else %}ов{% endif %})</span>
+            {% endif %}
+        </h2>
+        
+        {% if results %}
+            {% for result in results %}
+            <div style="border: 2px solid #ddd; border-radius: 10px; padding: 20px; margin-bottom: 20px; 
+                        {% if result.status == 'completed' %}background: #d4edda; border-color: #28a745;
+                        {% elif result.status == 'failed' or result.status == 'error' %}background: #f8d7da; border-color: #dc3545;
+                        {% elif result.status == 'running' %}background: #d1ecf1; border-color: #17a2b8;
+                        {% elif result.status == 'pending' %}background: #fff3cd; border-color: #ffc107;
+                        {% else %}background: #e2e3e5; border-color: #6c757d;{% endif %}">
+                
+                <!-- Заголовок результата -->
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                    <h3 style="margin: 0; color: #333;">
+                        Запуск #{{ forloop.counter }}
+                    </h3>
+                    <div>
+                        {% if result.status == 'completed' %}
+                            <span style="background: #28a745; color: white; padding: 8px 15px; border-radius: 5px; font-weight: bold;">
+                                ✓ Выполнено успешно
+                            </span>
+                        {% elif result.status == 'failed' %}
+                            <span style="background: #dc3545; color: white; padding: 8px 15px; border-radius: 5px; font-weight: bold;">
+                                ✗ Ошибка выполнения
+                            </span>
+                        {% elif result.status == 'running' %}
+                            <span style="background: #17a2b8; color: white; padding: 8px 15px; border-radius: 5px; font-weight: bold;">
+                                ▶ Выполняется
+                            </span>
+                        {% elif result.status == 'pending' %}
+                            <span style="background: #ffc107; color: #333; padding: 8px 15px; border-radius: 5px; font-weight: bold;">
+                                ⏳ В очереди
+                            </span>
+                        {% elif result.status == 'error' %}
+                            <span style="background: #6c757d; color: white; padding: 8px 15px; border-radius: 5px; font-weight: bold;">
+                                ⚠ Системная ошибка
+                            </span>
+                        {% else %}
+                            <span style="background: #e0e0e0; color: #333; padding: 8px 15px; border-radius: 5px; font-weight: bold;">
+                                {{ result.status|upper }}
+                            </span>
+                        {% endif %}
+                    </div>
+                </div>
+                
+                <!-- Информация о выполнении -->
+                <div style="display: grid; grid-template-columns: 150px 1fr; gap: 10px; margin-bottom: 15px; color: #333;">
+                    <strong>Время запуска:</strong>
+                    <span>{{ result.created_at|date:"d.m.Y H:i:s" }}</span>
+                    
+                    {% if result.execution_time_seconds %}
+                    <strong>Время выполнения:</strong>
+                    <span>{{ result.execution_time_seconds }} секунд</span>
+                    {% endif %}
+                </div>
+                
+                <!-- Решение/результат -->
+                {% if result.solution %}
+                <div style="margin-bottom: 15px;">
+                    <strong style="color: #333; display: block; margin-bottom: 5px;">Результат:</strong>
+                    <div style="background: white; padding: 15px; border-radius: 5px; border: 1px solid #ddd;">
+                        {{ result.solution }}
+                    </div>
+                </div>
+                {% endif %}
+                
+                <!-- Вывод программы -->
+                {% if result.output %}
+                <div style="margin-bottom: 15px;">
+                    <strong style="color: #333; display: block; margin-bottom: 5px;">Вывод программы (stdout):</strong>
+                    <pre style="background: #1e1e1e; color: #d4d4d4; padding: 15px; border-radius: 5px; overflow-x: auto; margin: 0; font-family: 'Courier New', monospace;"><code>{{ result.output }}</code></pre>
+                </div>
+                {% endif %}
+                
+                <!-- Ошибка -->
+                {% if result.error_message %}
+                <div style="margin-bottom: 0;">
+                    <strong style="color: #721c24; display: block; margin-bottom: 5px;">Сообщение об ошибке:</strong>
+                    <pre style="background: #f5c6cb; color: #721c24; padding: 15px; border-radius: 5px; overflow-x: auto; margin: 0; font-family: 'Courier New', monospace; border: 1px solid #f1aeb5;"><code>{{ result.error_message }}</code></pre>
+                </div>
+                {% endif %}
+            </div>
+            {% endfor %}
+        {% else %}
+            <div style="text-align: center; padding: 40px; background: white; border-radius: 10px; border: 2px dashed #ddd;">
+                <div style="font-size: 60px; margin-bottom: 15px;">⏸</div>
+                <h3 style="color: #666; margin-bottom: 10px;">Задача еще не выполнялась</h3>
+                <p style="color: #999;">
+                    Результаты выполнения появятся здесь после запуска задачи
+                </p>
+            </div>
+        {% endif %}
+    </div>
+    
+    <!-- Действия -->
+    <div style="display: flex; gap: 10px;">
+        <a href="{% url 'my_tasks' %}" class="btn btn-secondary">
+            ← Назад к списку
+        </a>
+        <a href="{% url 'submit_task' %}" class="btn btn-primary">
+            ➕ Создать новую задачу
+        </a>
+    </div>
+</div>
+
+<style>
+    /* Стили для кода */
+    code {
+        background: #f4f4f4;
+        padding: 2px 6px;
+        border-radius: 3px;
+        font-family: 'Courier New', monospace;
+        font-size: 14px;
+    }
+    
+    pre code {
+        background: transparent;
+        padding: 0;
+    }
+    
+    /* Адаптивность для мобильных */
+    @media (max-width: 768px) {
+        .card > div[style*="display: grid"] {
+            grid-template-columns: 1fr !important;
+        }
+    }
+</style>
+{% endblock %}
