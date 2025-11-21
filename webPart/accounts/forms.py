@@ -1,81 +1,80 @@
 from django import forms
-from django.contrib.auth.forms import UserCreationForm
-from .models import User, AdminProfile, OrdinaryUserProfile
 
-
-class UserRegistrationForm(UserCreationForm):
-    email = forms.EmailField(required=True)
-    user_type = forms.ChoiceField(choices=User.USER_TYPE_CHOICES, initial='ordinary')
-
-    class Meta:
-        model = User
-        fields = ('username', 'email', 'user_type', 'password1', 'password2')
-
-
-class AdminProfileForm(forms.ModelForm):
-    class Meta:
-        model = AdminProfile
-        fields = ('department', 'phone', 'permissions_level', 'access_code')
-
-
-class OrdinaryUserProfileForm(forms.ModelForm):
-    class Meta:
-        model = OrdinaryUserProfile
-        fields = ('bio', 'avatar', 'birth_date', 'phone', 'city', 'subscription_active')
-        widgets = {
-            'birth_date': forms.DateInput(attrs={'type': 'date'}),
-            'bio': forms.Textarea(attrs={'rows': 4}),
-        }
-
-
-class TaskSubmissionForm(forms.Form):
-    """
-    Форма для отправки новой задачи с Python-кодом.
-    """
-    filename = forms.CharField(
-        label="Название файла",
-        required=True,
-        max_length=255,
-        initial="script.py",
-        widget=forms.TextInput(attrs={'placeholder': 'script.py'}),
-        help_text="Укажите название файла (с расширением .py)"
+class UserRegistrationForm(forms.Form):
+    username = forms.CharField(
+        label="Имя пользователя",
+        widget=forms.TextInput(attrs={'class': 'form-control'})
     )
-    
-    python_code = forms.CharField(
-        label="Python код",
-        required=False,
-        widget=forms.Textarea(attrs={
-            'placeholder': 'Напишите ваш Python код здесь...\n\nНапример:\ndef calculate():\n    return sum(range(100))\n\nresult = calculate()\nprint(result)',
-            'rows': 15,
-            'style': 'font-family: monospace; font-size: 14px;'
-        }),
-        help_text="Введите Python код или загрузите файл ниже."
+    email = forms.EmailField(
+        label="Email",
+        widget=forms.EmailInput(attrs={'class': 'form-control'})
     )
-    
-    python_file = forms.FileField(
-        label="Или загрузите Python файл",
-        required=False,
-        widget=forms.FileInput(attrs={'accept': '.py'}),
-        help_text="Загрузите готовый .py файл (необязательно, если код введен выше)"
+    user_type = forms.ChoiceField(
+        label="Тип пользователя",
+        choices=[('ordinary', 'Обычный пользователь'), ('admin', 'Администратор')],
+        widget=forms.Select(attrs={'class': 'form-control'})
     )
-    
+    password = forms.CharField(
+        label="Пароль",
+        widget=forms.PasswordInput(attrs={'class': 'form-control'})
+    )
+    password_confirm = forms.CharField(
+        label="Подтвердите пароль",
+        widget=forms.PasswordInput(attrs={'class': 'form-control'})
+    )
+
     def clean(self):
         cleaned_data = super().clean()
-        python_code = cleaned_data.get('python_code')
-        python_file = cleaned_data.get('python_file')
-        filename = cleaned_data.get('filename')
-        
-        # Проверяем, что хотя бы один источник кода указан
-        if not python_code and not python_file:
-            raise forms.ValidationError("Необходимо либо ввести код, либо загрузить файл.")
-        
-        # Проверяем расширение файла
-        if filename and not filename.endswith('.py'):
-            raise forms.ValidationError("Название файла должно иметь расширением .py")
-        
-        # Если загружен файл, проверяем его расширение
-        if python_file:
-            if not python_file.name.endswith('.py'):
-                raise forms.ValidationError("Можно загружать только .py файлы")
-        
+        password = cleaned_data.get("password")
+        password_confirm = cleaned_data.get("password_confirm")
+
+        if password and password_confirm and password != password_confirm:
+            raise forms.ValidationError("Пароли не совпадают")
         return cleaned_data
+
+# Оставьте TaskSubmissionForm ниже без изменений
+class TaskSubmissionForm(forms.Form):
+    filename = forms.CharField(
+        label="Название файла (задачи)",
+        max_length=255,
+        widget=forms.TextInput(attrs={'class': 'form-control'})
+    )
+    python_file = forms.FileField(
+        label="Файл .py",
+        required=False,
+        widget=forms.FileInput(attrs={'class': 'form-control'})
+    )
+    python_code = forms.CharField(
+        label="Или вставьте код Python сюда",
+        required=False,
+        widget=forms.Textarea(attrs={'class': 'form-control', 'rows': 10})
+    )
+
+
+# webPart/accounts/forms.py
+
+# ... (предыдущие импорты и классы)
+
+class UserProfileForm(forms.Form):
+    bio = forms.CharField(
+        label="О себе",
+        required=False,
+        widget=forms.Textarea(attrs={'class': 'form-control', 'rows': 4, 'placeholder': 'Расскажите немного о себе...'})
+    )
+    phone = forms.CharField(
+        label="Телефон",
+        required=False,
+        max_length=20,
+        widget=forms.TextInput(attrs={'class': 'form-control', 'placeholder': '+7 (999) 000-00-00'})
+    )
+    city = forms.CharField(
+        label="Город",
+        required=False,
+        max_length=100,
+        widget=forms.TextInput(attrs={'class': 'form-control'})
+    )
+    birth_date = forms.DateField(
+        label="Дата рождения",
+        required=False,
+        widget=forms.DateInput(attrs={'class': 'form-control', 'type': 'date'})
+    )

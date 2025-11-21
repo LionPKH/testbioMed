@@ -1,46 +1,19 @@
 from django.shortcuts import render, redirect
+from django.contrib.auth import login, logout
+from django.contrib.auth.decorators import login_required, user_passes_test
 from django.contrib import messages
-from django.core.files.uploadedfile import SimpleUploadedFile
 from .forms import TaskSubmissionForm
 from .api_client import api_client
 from asgiref.sync import async_to_sync
 import hashlib
-import functools
-from django.http import JsonResponse
-from .forms import TaskSubmissionForm, UserRegistrationForm, UserProfileForm
-
-# --- КАСТОМНЫЕ ДЕКОРАТОРЫ ---
-
-def api_login_required(view_func):
-    """Проверяет, есть ли user_id в сессии."""
-
-    @functools.wraps(view_func)
-    def wrapper(request, *args, **kwargs):
-        if 'user_id' not in request.session:
-            messages.warning(request, "Сначала войдите в систему")
-            return redirect('login')
-        return view_func(request, *args, **kwargs)
-
-    return wrapper
 
 
-def api_admin_required(view_func):
-    """Проверяет, есть ли user_id в сессии И является ли тип пользователя 'admin'."""
+def is_admin(user):
+    return user.is_authenticated and user.user_type == 'admin'
 
-    @functools.wraps(view_func)
-    def wrapper(request, *args, **kwargs):
-        # 1. Проверка на авторизацию
-        if 'user_id' not in request.session:
-            messages.warning(request, "Сначала войдите в систему")
-            return redirect('login')
 
-        # 2. Проверка на права админа
-        if request.session.get('user_type') != 'admin':
-            return redirect('access_denied')
-
-        return view_func(request, *args, **kwargs)
-
-    return wrapper
+def is_ordinary(user):
+    return user.is_authenticated and user.user_type == 'ordinary'
 
 
 def hash_password(password: str) -> str:
@@ -48,56 +21,51 @@ def hash_password(password: str) -> str:
     return hashlib.sha256(password.encode()).hexdigest()
 
 
-# --- AUTH VIEWS ---
-
 def register_view(request):
     """Регистрация через FastAPI"""
-    # 1. Если отправили данные (нажали кнопку)
     if request.method == 'POST':
-        form = UserRegistrationForm(request.POST)
-        if form.is_valid():
-            # Данные берем из очищенной формы
-            username = form.cleaned_data['username']
-            email = form.cleaned_data['email']
-            password = form.cleaned_data['password']
-            user_type = form.cleaned_data['user_type']
-
-            try:
-                hashed_pw = hash_password(password)
-
-                if user_type == 'admin':
-                    result = async_to_sync(api_client.register_admin)(
-                        username=username,
-                        email=email,
-                        password=hashed_pw
-                    )
-                else:
-                    result = async_to_sync(api_client.register_user)(
-                        username=username,
-                        email=email,
-                        password=hashed_pw
-                    )
-
-                request.session['user_id'] = result['id']
-                request.session['username'] = username
-                request.session['user_type'] = user_type
-
-                messages.success(request, f'Добро пожаловать, {username}!')
-
-                if user_type == 'admin':
-                    return redirect('admin_dashboard')
-                else:
-                    return redirect('user_dashboard')
-
-            except Exception as e:
-                messages.error(request, f'Ошибка регистрации: {str(e)}')
-
-    # 2. Если просто открыли страницу (GET запрос)
-    else:
-        form = UserRegistrationForm()  # Создаем пустую форму
-
-    # ВАЖНО: Передаем форму в шаблон
-    return render(request, 'accounts/register.html', {'form': form})
+        username = request.POST.get('username')
+        email = request.POST.get('email')
+        password = request.POST.get('password1')
+        password2 = request.POST.get('password2')
+        user_type = request.POST.get('user_type', 'ordinary')
+        
+        if password != password2:
+            messages.error(request, 'Пароли не совпадают')
+            return render(request, 'accounts/register.html')
+        
+        try:
+            hashed_pw = hash_password(password)
+            
+            if user_type == 'admin':
+                result = async_to_sync(api_client.register_admin)(
+                    username=username,
+                    email=email,
+                    password=hashed_pw
+                )
+            else:
+                result = async_to_sync(api_client.register_user)(
+                    username=username,
+                    email=email,
+                    password=hashed_pw
+                )
+            
+            # Создаем локальную сессию Django
+            request.session['user_id'] = result['id']
+            request.session['username'] = username
+            request.session['user_type'] = user_type
+            
+            messages.success(request, f'Добро пожаловать, {username}!')
+            
+            if user_type == 'admin':
+                return redirect('admin_dashboard')
+            else:
+                return redirect('user_dashboard')
+                
+        except Exception as e:
+            messages.error(request, f'Ошибка регистрации: {str(e)}')
+    
+    return render(request, 'accounts/register.html')
 
 
 def login_view(request):
@@ -105,18 +73,18 @@ def login_view(request):
     if request.method == 'POST':
         username = request.POST.get('username')
         password = request.POST.get('password')
-
+        
         try:
             auth_info = async_to_sync(api_client.get_auth_info)(username)
             hashed_pw = hash_password(password)
-
+            
             if auth_info['password'] == hashed_pw:
                 request.session['user_id'] = auth_info['id']
                 request.session['username'] = auth_info['username']
                 request.session['user_type'] = auth_info['user_type']
-
+                
                 messages.success(request, f'Добро пожаловать, {username}!')
-
+                
                 if auth_info['user_type'] == 'admin':
                     return redirect('admin_dashboard')
                 else:
@@ -124,62 +92,55 @@ def login_view(request):
             else:
                 messages.error(request, 'Неверное имя пользователя или пароль')
         except Exception as e:
-            # Логируем ошибку в консоль для отладки, пользователю показываем общее сообщение
-            print(f"Login error: {e}")
             messages.error(request, 'Неверное имя пользователя или пароль')
-
+    
     return render(request, 'accounts/login.html')
 
 
-@api_login_required
+@login_required
 def logout_view(request):
-    # Полная очистка сессии
-    request.session.flush()
+    logout(request)
     messages.info(request, 'Вы вышли из системы')
     return redirect('login')
 
 
-# --- USER VIEWS ---
-
-@api_login_required
+@login_required
 def user_dashboard(request):
     """Дашборд пользователя с данными из FastAPI"""
     user_id = request.session.get('user_id')
-
+    
     try:
         user_data = async_to_sync(api_client.get_user_full)(user_id)
         tasks = async_to_sync(api_client.list_user_tasks)(user_id)
-
+        
         # Статистика
         total_tasks = len(tasks)
         completed = sum(1 for t in tasks if t.get('status') == 'completed')
         running = sum(1 for t in tasks if t.get('status') == 'running')
         pending = sum(1 for t in tasks if t.get('status') == 'pending')
-
+        
         statistics = {
             'total_tasks': total_tasks,
             'completed_tasks': completed,
             'running_tasks': running,
             'pending_tasks': pending
         }
-
+        
         context = {
             'profile': user_data.get('details', {}),
             'user': user_data,
             'statistics': statistics,
             'recent_tasks': tasks[:5]
         }
-
+        
         return render(request, 'accounts/user_dashboard.html', context)
-
+        
     except Exception as e:
-        print(f"Dashboard error: {e}")
-        messages.error(request, 'Ошибка загрузки данных дашборда')
-        # Если ошибка критичная, можно разлогинить, но лучше просто показать что есть
-        return render(request, 'accounts/user_dashboard.html', {'statistics': {}, 'recent_tasks': []})
+        messages.error(request, f'Ошибка загрузки данных: {str(e)}')
+        return redirect('login')
 
 
-@api_login_required
+@login_required
 def submit_task_view(request):
     """Создание задачи через FastAPI"""
     if request.method == 'POST':
@@ -189,54 +150,55 @@ def submit_task_view(request):
             filename = form.cleaned_data['filename']
             python_code = form.cleaned_data.get('python_code')
             python_file = form.cleaned_data.get('python_file')
-
+            
             # Определяем содержимое
             if python_file:
                 content = python_file.read()
             else:
                 content = python_code.encode('utf-8')
-
+            
             try:
                 # Создаем временный файл для отправки
+                from django.core.files.uploadedfile import SimpleUploadedFile
                 temp_file = SimpleUploadedFile(
                     filename,
                     content,
                     content_type='text/x-python'
                 )
-
-                async_to_sync(api_client.create_task)(
+                
+                task = async_to_sync(api_client.create_task)(
                     user_id=user_id,
                     name=filename,
                     description=f"Python task: {filename}",
                     files=[temp_file]
                 )
-
+                
                 messages.success(request, f'✅ Задача {filename} успешно создана!')
                 return redirect('my_tasks')
-
+                
             except Exception as e:
                 messages.error(request, f'Ошибка создания задачи: {str(e)}')
     else:
         form = TaskSubmissionForm()
-
+    
     return render(request, 'accounts/submit_task.html', {'form': form})
 
 
-@api_login_required
+@login_required
 def my_tasks_view(request):
     """Список задач пользователя"""
     user_id = request.session.get('user_id')
-
+    
     try:
         tasks = async_to_sync(api_client.list_user_tasks)(user_id)
-
+        
         # Статистика
         total = len(tasks)
         completed = sum(1 for t in tasks if t.get('status') == 'completed')
         running = sum(1 for t in tasks if t.get('status') == 'running')
         pending = sum(1 for t in tasks if t.get('status') == 'pending')
         failed = sum(1 for t in tasks if t.get('status') == 'failed')
-
+        
         statistics = {
             'total_tasks': total,
             'completed_tasks': completed,
@@ -244,127 +206,106 @@ def my_tasks_view(request):
             'pending_tasks': pending,
             'failed_tasks': failed
         }
-
+        
         context = {
             'tasks': tasks,
             'statistics': statistics
         }
-
+        
         return render(request, 'accounts/my_tasks.html', context)
-
+        
     except Exception as e:
         messages.error(request, f'Ошибка загрузки задач: {str(e)}')
         return render(request, 'accounts/my_tasks.html', {'tasks': [], 'statistics': {}})
 
 
-@api_login_required
+@login_required
 def task_detail_view(request, task_id):
     """Детали задачи"""
     user_id = request.session.get('user_id')
-
+    
     try:
-        # Получаем список задач, чтобы найти нужную (или можно сделать отдельный endpoint get_task)
         tasks = async_to_sync(api_client.list_user_tasks)(user_id)
-        # Ищем задачу по ID (приводим к строке на случай несовпадения типов)
-        task = next((t for t in tasks if str(t['id']) == str(task_id)), None)
-
+        task = next((t for t in tasks if t['id'] == task_id), None)
+        
         if not task:
             messages.error(request, 'Задача не найдена')
             return redirect('my_tasks')
-
+        
         # Получаем файлы
-        try:
-            input_files = async_to_sync(api_client.get_task_input_files)(task_id)
-            result_files = async_to_sync(api_client.get_task_result_files)(task_id)
-        except Exception:
-            input_files = []
-            result_files = []
-
+        input_files = async_to_sync(api_client.get_task_input_files)(task_id)
+        result_files = async_to_sync(api_client.get_task_result_files)(task_id)
+        
         context = {
             'task': task,
             'input_files': input_files,
             'result_files': result_files
         }
-
+        
         return render(request, 'accounts/task_detail.html', context)
-
+        
     except Exception as e:
         messages.error(request, f'Ошибка загрузки данных: {str(e)}')
         return redirect('my_tasks')
 
 
-@api_login_required
-def user_profile_edit(request):
-    """Редактирование профиля через API"""
-    user_id = request.session.get('user_id')
-
-    # 1. Получаем текущие данные пользователя из API
-    try:
-        user_data_full = async_to_sync(api_client.get_user_full)(user_id)
-        # Предполагаем, что данные профиля лежат внутри ключа 'details' или 'profile'
-        # Адаптируйте этот ключ под ответ вашего API (если там просто плоский JSON, то user_data_full)
-        current_profile_data = user_data_full.get('details', {})
-    except Exception as e:
-        messages.error(request, f'Ошибка загрузки данных: {str(e)}')
-        return redirect('user_dashboard')
-
-    # 2. Обработка сохранения (POST)
-    if request.method == 'POST':
-        form = UserProfileForm(request.POST)
-        if form.is_valid():
-            # Подготовка данных для отправки в API
-            update_data = {
-                'bio': form.cleaned_data['bio'],
-                'phone': form.cleaned_data['phone'],
-                'city': form.cleaned_data['city'],
-                # Дату нужно превратить в строку (ISO format), так как JSON не понимает объекты date
-                'birth_date': form.cleaned_data['birth_date'].isoformat() if form.cleaned_data['birth_date'] else None
-            }
-
-            try:
-                async_to_sync(api_client.update_user)(user_id, update_data)
-                messages.success(request, 'Профиль успешно обновлен!')
-                return redirect('user_dashboard')
-            except Exception as e:
-                messages.error(request, f'Ошибка обновления: {str(e)}')
-
-    # 3. Отображение страницы (GET) - заполняем форму текущими данными
-    else:
-        # Заполняем форму данными, которые пришли из API
-        form = UserProfileForm(initial=current_profile_data)
-
-    return render(request, 'accounts/user_profile_edit.html', {'form': form})
-
-
-# --- ADMIN VIEWS ---
-
-@api_admin_required
+@login_required
+@user_passes_test(is_admin, login_url='/access-denied/')
 def admin_dashboard(request):
     """Панель администратора"""
     user_id = request.session.get('user_id')
-
+    
     try:
         user_data = async_to_sync(api_client.get_user_full)(user_id)
-
+        
         context = {
             'profile': user_data.get('admin', {}),
             'user': user_data,
-            'total_users': 0,  # TODO: реализовать endpoint подсчета пользователей
+            'total_users': 0,  # TODO: добавить endpoint в API
             'total_admins': 0
         }
-
+        
         return render(request, 'accounts/admin_dashboard.html', context)
-
+        
     except Exception as e:
         messages.error(request, f'Ошибка загрузки данных: {str(e)}')
         return redirect('login')
 
 
-@api_admin_required
+@login_required
+def user_profile_edit(request):
+    """Редактирование профиля через API"""
+    user_id = request.session.get('user_id')
+    
+    if request.method == 'POST':
+        update_data = {
+            'bio': request.POST.get('bio'),
+            'phone': request.POST.get('phone'),
+            'city': request.POST.get('city'),
+            'birth_date': request.POST.get('birth_date')
+        }
+        
+        try:
+            async_to_sync(api_client.update_user)(user_id, update_data)
+            messages.success(request, 'Профиль обновлен!')
+            return redirect('user_dashboard')
+        except Exception as e:
+            messages.error(request, f'Ошибка обновления: {str(e)}')
+    
+    try:
+        user_data = async_to_sync(api_client.get_user_full)(user_id)
+        return render(request, 'accounts/user_profile_edit.html', {'profile': user_data.get('details', {})})
+    except Exception as e:
+        messages.error(request, f'Ошибка загрузки данных: {str(e)}')
+        return redirect('user_dashboard')
+
+
+@login_required
+@user_passes_test(is_admin, login_url='/access-denied/')
 def admin_profile_edit(request):
     """Редактирование профиля администратора"""
     user_id = request.session.get('user_id')
-
+    
     if request.method == 'POST':
         update_data = {
             'department': request.POST.get('department'),
@@ -372,14 +313,14 @@ def admin_profile_edit(request):
             'permissions_level': int(request.POST.get('permissions_level', 1)),
             'access_code': request.POST.get('access_code')
         }
-
+        
         try:
             async_to_sync(api_client.update_user)(user_id, update_data)
             messages.success(request, 'Профиль обновлен!')
             return redirect('admin_dashboard')
         except Exception as e:
             messages.error(request, f'Ошибка обновления: {str(e)}')
-
+    
     try:
         user_data = async_to_sync(api_client.get_user_full)(user_id)
         return render(request, 'accounts/admin_profile_edit.html', {'profile': user_data.get('admin', {})})
@@ -390,7 +331,3 @@ def admin_profile_edit(request):
 
 def access_denied(request):
     return render(request, 'accounts/access_denied.html', status=403)
-
-def health_check(request):
-    """Простая проверка, что Django работает"""
-    return JsonResponse({'status': 'ok', 'service': 'django-web-part'})

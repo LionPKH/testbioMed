@@ -11,8 +11,6 @@ from django.conf.urls.static import static
 from . import views
 
 urlpatterns = [
-    # Admin (может не использоваться)
-    path('admin/', admin.site.urls),
 
     # Главная страница - редирект на login
     path('', lambda request: redirect('login')),

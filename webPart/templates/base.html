@@ -1,190 +1,190 @@
-<!-- ============================================ -->
-<!-- templates/base.html -->
-<!-- ============================================ -->
 <!DOCTYPE html>
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}User System{% endblock %}</title>
+    <title>{% block title %}BioMed System{% endblock %}</title>
+    <!-- Подключаем Bootstrap для сетки и иконок (опционально, но полезно) -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+
     <style>
         * {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
         }
-        
+
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             min-height: 100vh;
             padding: 20px;
+            display: flex;
+            flex-direction: column;
         }
-        
-        .container {
+
+        .container-custom {
             max-width: 1200px;
             margin: 0 auto;
+            width: 100%;
         }
-        
-        .navbar {
+
+        /* Навигация */
+        .navbar-custom {
             background: white;
             padding: 15px 30px;
-            border-radius: 10px;
+            border-radius: 15px;
             margin-bottom: 30px;
             display: flex;
             justify-content: space-between;
             align-items: center;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
         }
-        
-        .navbar a {
+
+        .navbar-custom a {
             color: #667eea;
             text-decoration: none;
-            margin: 0 15px;
-            font-weight: 500;
+            margin-left: 20px;
+            font-weight: 600;
             transition: color 0.3s;
         }
-        
-        .navbar a:hover {
+
+        .navbar-custom a:hover {
             color: #764ba2;
         }
-        
-        .card {
+
+        .user-info strong {
+            color: #333;
+        }
+
+        /* Карточки контента */
+        .card-custom {
             background: white;
             border-radius: 15px;
-            padding: 30px;
-            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+            padding: 40px;
+            box-shadow: 0 15px 35px rgba(0, 0, 0, 0.2);
+            margin-bottom: 20px;
         }
-        
+
+        /* Сообщения (Alerts) */
         .messages {
             margin-bottom: 20px;
         }
-        
-        .alert {
-            padding: 12px 20px;
-            border-radius: 8px;
-            margin-bottom: 10px;
+
+        .alert-custom {
+            padding: 15px 20px;
+            border-radius: 10px;
+            margin-bottom: 15px;
+            border: 1px solid transparent;
+            font-weight: 500;
         }
-        
-        .alert-success {
-            background-color: #d4edda;
-            color: #155724;
-            border: 1px solid #c3e6cb;
-        }
-        
-        .alert-error {
-            background-color: #f8d7da;
-            color: #721c24;
-            border: 1px solid #f5c6cb;
-        }
-        
-        .alert-info {
-            background-color: #d1ecf1;
-            color: #0c5460;
-            border: 1px solid #bee5eb;
-        }
-        
-        .btn {
+
+        .alert-success { background-color: #d4edda; color: #155724; border-color: #c3e6cb; }
+        .alert-error, .alert-danger { background-color: #f8d7da; color: #721c24; border-color: #f5c6cb; }
+        .alert-info { background-color: #d1ecf1; color: #0c5460; border-color: #bee5eb; }
+        .alert-warning { background-color: #fff3cd; color: #856404; border-color: #ffeeba; }
+
+        /* Кнопки */
+        .btn-custom {
             padding: 12px 25px;
             border: none;
             border-radius: 8px;
             cursor: pointer;
             font-size: 16px;
-            font-weight: 500;
+            font-weight: 600;
             text-decoration: none;
             display: inline-block;
             transition: all 0.3s;
+            text-align: center;
         }
-        
-        .btn-primary {
+
+        .btn-primary-custom {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
+            box-shadow: 0 4px 6px rgba(102, 126, 234, 0.3);
         }
-        
-        .btn-primary:hover {
+
+        .btn-primary-custom:hover {
             transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
-        }
-        
-        .btn-secondary {
-            background: #6c757d;
+            box-shadow: 0 6px 12px rgba(102, 126, 234, 0.4);
             color: white;
         }
-        
-        .form-group {
-            margin-bottom: 20px;
-        }
-        
-        .form-group label {
-            display: block;
-            margin-bottom: 8px;
-            color: #333;
-            font-weight: 500;
-        }
-        
-        .form-group input,
-        .form-group select,
-        .form-group textarea {
+
+        /* Формы */
+        .form-group { margin-bottom: 20px; }
+        .form-label { display: block; margin-bottom: 8px; color: #444; font-weight: 600; }
+
+        .form-control-custom {
             width: 100%;
-            padding: 12px;
+            padding: 12px 15px;
             border: 2px solid #e0e0e0;
             border-radius: 8px;
             font-size: 16px;
-            transition: border-color 0.3s;
+            transition: all 0.3s;
+            background-color: #f8f9fa;
         }
-        
-        .form-group input:focus,
-        .form-group select:focus,
-        .form-group textarea:focus {
+
+        .form-control-custom:focus {
             outline: none;
             border-color: #667eea;
+            background-color: white;
+            box-shadow: 0 0 0 4px rgba(102, 126, 234, 0.1);
+        }
+
+        /* Центрирование для страниц входа/регистрации */
+        .center-wrapper {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            flex-grow: 1;
+        }
+        .center-card {
+            width: 100%;
+            max-width: 500px;
         }
     </style>
 </head>
 <body>
-{% if messages %}
-<div class="messages" style="padding: 0 20px; max-width: 1200px; margin: 20px auto 0;">
-    {% for message in messages %}
-    <div class="alert alert-{{ message.tags }}" role="alert"
-         style="background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; padding: 15px; border-radius: 8px; margin-bottom: 15px;">
-        {{ message }}
-    </div>
-    {% endfor %}
-</div>
-{% endif %}
-<div class="container">
-    {% if user.is_authenticated %}
-    <nav class="navbar">
-        <div>
-            <strong>Привет, {{ user.username }}!</strong>
-            <span style="color: #888; margin-left: 10px;">
-                    ({{ user.get_user_type_display }})
-                </span>
+
+<div class="container-custom">
+    <!-- Навигация: Показываем только если есть user_id в сессии -->
+    {% if request.session.user_id %}
+    <nav class="navbar-custom">
+        <div class="user-info">
+            <strong>Привет, {{ request.session.username }}!</strong>
+            {% if request.session.user_type == 'admin' %}
+                <span class="badge bg-danger ms-2">Admin</span>
+            {% else %}
+                <span class="badge bg-secondary ms-2">User</span>
+            {% endif %}
         </div>
         <div>
-            {% if user.user_type == 'admin' %}
-            <a href="{% url 'admin_dashboard' %}">Панель управления</a>
-            <a href="{% url 'admin_profile_edit' %}">Настройки профиля</a>
+            {% if request.session.user_type == 'admin' %}
+                <a href="{% url 'admin_dashboard' %}">Панель</a>
+                <a href="{% url 'admin_profile_edit' %}">Настройки</a>
             {% else %}
-            <a href="{% url 'user_dashboard' %}">Мой профиль</a>
-            <a href="{% url 'user_profile_edit' %}">Редактировать</a>
+                <a href="{% url 'user_dashboard' %}">Профиль</a>
+                <a href="{% url 'my_tasks' %}">Задачи</a>
             {% endif %}
-            <a href="{% url 'logout' %}">Выйти</a>
+            <a href="{% url 'logout' %}" style="color: #dc3545;">Выйти</a>
         </div>
     </nav>
     {% endif %}
 
+    <!-- Сообщения Django -->
     {% if messages %}
     <div class="messages">
         {% for message in messages %}
-        <div class="alert alert-{{ message.tags }}">
+        <div class="alert-custom alert-{{ message.tags }}">
             {{ message }}
         </div>
         {% endfor %}
     </div>
     {% endif %}
 
+    <!-- Основной контент страницы -->
     {% block content %}{% endblock %}
 </div>
+
 </body>
 </html>
