@@ -7,7 +7,137 @@ import numpy as np
 from typing import List, Dict, Optional, Tuple
 from collections import defaultdict, deque
 import hashlib
+import sys
+import json
+import time
+import uuid
+# Импорт вашего транспорта
+from transport.master_transport import MasterNodeTransport
 
+
+# --- НАСТРОЙКИ СУЩЕСТВУЮЩЕЙ БД ---
+class DatabaseHandler:
+    def __init__(self):
+        # TODO: Укажите параметры вашей существующей базы данных
+        self.config = {
+            "dbname": "testDB",  # Имя вашей БД
+            "user": "petrk",  # Ваш пользователь
+            "password": "123",  # Ваш пароль
+            "host": "localhost",
+            "port": 5432
+        }
+
+    def get_connection(self):
+        """Возвращает соединение с БД. Замените библиотеку на нужную (psycopg2, mysql и т.д.)"""
+        import sqlite3
+        import psycopg2  # Если используете Postgres
+
+        # Пример для SQLite (файловая БД):
+        # conn = sqlite3.connect("my_existing_database.db")
+
+        # Пример для PostgreSQL:
+        conn = psycopg2.connect(**self.config)
+
+        return conn
+
+    def save_result(self, task_id, combined_data, status="completed"):
+        """
+        Метод сохранения результата в СУЩЕСТВУЮЩУЮ таблицу.
+        Вам нужно проверить название таблицы и колонок.
+        """
+        conn = self.get_connection()
+        try:
+            cur = conn.cursor()
+
+            # Сериализуем данные в JSON строку перед записью
+            data_json = json.dumps(combined_data, ensure_ascii=False)
+
+            # TODO: Проверьте название таблицы (results?) и колонок
+            query = """
+                INSERT INTO results (task_id, data, status, created_at)
+                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            """
+            # Для Postgres используйте %s вместо ?
+
+            cur.execute(query, (task_id, data_json, status))
+            conn.commit()
+            print(f"[DB] Данные задачи {task_id} сохранены в существующую БД.")
+
+        except Exception as e:
+            print(f"[DB Error] Ошибка записи в БД: {e}")
+            conn.rollback()
+        finally:
+            conn.close()
+
+
+def process_worker_responses(transport_api, active_tasks_registry):
+    """
+    Считывает ответы, объединяет подзадачи и сохраняет в БД.
+
+    :param transport_api: экземпляр MasterNodeTransport
+    :param active_tasks_registry: словарь active_tasks из класса Master
+    """
+
+    # 1. Забираем результаты из транспорта и очищаем буфер (disposable=True)
+    # Возвращает dict: { 'node_id': [ { 'result': ..., 'timestamp': ... } ] }
+    nodes_results = transport_api.get_results(disposable=True)
+
+    if not nodes_results:
+        return
+
+    for node_id, messages in nodes_results.items():
+        for msg in messages:
+            try:
+                # В 'result' лежит payload, который отправила ESP32
+                payload = msg.get('result')
+
+                # Если payload пришел строкой, парсим JSON
+                if isinstance(payload, str):
+                    payload = json.loads(payload)
+
+                # Ожидаем структуру: {"task_id": "...", "subtask_index": 0, "data": "..."}
+                task_id = payload.get("task_id")
+
+                if not task_id or task_id not in active_tasks_registry:
+                    # Либо мусор, либо задача уже выполнена/отменена
+                    continue
+
+                task_info = active_tasks_registry[task_id]
+                subtask_idx = payload.get("subtask_index", 0)
+                worker_data = payload.get("data") or payload.get("output")
+
+                # Сохраняем часть результата
+                print(f"[Logic] Пришла часть {subtask_idx} для {task_id} от {node_id}")
+                task_info['received_parts'][subtask_idx] = worker_data
+
+                # 2. Проверка: все ли части собраны?
+                if len(task_info['received_parts']) == task_info['total_parts']:
+                    print(f"[Logic] Все части задачи {task_id} собраны. Объединение...")
+
+                    # Сортируем части по индексу, чтобы данные не перемешались
+                    sorted_parts = []
+                    for i in range(task_info['total_parts']):
+                        part_data = task_info['received_parts'].get(i)
+                        sorted_parts.append(part_data)
+
+                    # Формируем итоговый объект
+                    final_result = {
+                        "task_id": task_id,
+                        "original_params": task_info['params'],
+                        "aggregated_output": sorted_parts
+                    }
+
+                    # 3. Сохранение в СУЩЕСТВУЮЩУЮ БД
+                    db_handler.save_result(task_id, final_result)
+
+                    # Удаляем задачу из активных, так как она завершена
+                    del active_tasks_registry[task_id]
+
+            except Exception as e:
+                print(f"[Error] Ошибка обработки ответа от {node_id}: {e}")
+
+# Инициализация хендлера БД
+db_handler = DatabaseHandler()
 class TaskComplexityAnalyzer:
     """Анализатор сложности задач для предсказания времени выполнения"""
     
@@ -514,1008 +644,147 @@ result = process_subtask()
         spaces = ' ' * indent
         return '\n'.join(f"{spaces}{line}" for line in code.split('\n'))
 
-class EnhancedQueueTaskLoadBalancer:
-    def __init__(self, redis_host='localhost', redis_port=6379, redis_password=None, socket_timeout=5, socket_connect_timeout=5):
-        self.redis_host = redis_host
-        self.redis_port = redis_port
-        self.redis_password = redis_password
-        self.socket_timeout = socket_timeout
-        self.socket_connect_timeout = socket_connect_timeout
-        
-        # Создаем соединение
-        self.redis = self._create_redis_connection()
-        
-        self.nodes_key = "load_balancer:queue_nodes"
-        self.queues_key_prefix = "queue:node:"
-        self.failed_queues_key = "load_balancer:failed_queues"
-        self.node_stats_key_prefix = "node:stats:"
-        self.health_check_key_prefix = "node:health:"
-        self.task_analyzer = TaskComplexityAnalyzer()
-        self.task_splitter = TaskSplitter()
-        
-        # Кэш предсказаний для похожих программ
-        self.prediction_cache = {}
-        self.cache_ttl = 3600  # 1 час
-        
-        # Для управления составными задачами
-        self.task_dependencies = {}
-        self.composite_tasks = {}
-    
-    def _create_redis_connection(self):
-        """Создать соединение с Redis с обработкой ошибок"""
-        try:
-            connection = redis.Redis(
-                host=self.redis_host,
-                port=self.redis_port,
-                password=self.redis_password,
-                decode_responses=True,
-                socket_timeout=self.socket_timeout,
-                socket_connect_timeout=self.socket_connect_timeout,
-                health_check_interval=30
-            )
-            # Проверяем подключение
-            connection.ping()
-            return connection
-        except redis.ConnectionError as e:
-            raise
-        except redis.AuthenticationError as e:
-            raise
-        except Exception as e:
-            raise
-    
-    def _ensure_connection(self, max_retries=3):
-        """Проверить и восстановить соединение при необходимости"""
-        for attempt in range(max_retries):
-            try:
-                self.redis.ping()
-                return True
-            except (redis.ConnectionError, redis.TimeoutError) as e:
-                print(f"Redis connection lost (attempt {attempt + 1}/{max_retries}), reconnecting...")
-                if attempt < max_retries - 1:
-                    time.sleep(0.5 * (attempt + 1))
-                    try:
-                        self.redis = self._create_redis_connection()
-                        return True
-                    except:
-                        continue
-                else:
-                    print(" Failed to reconnect to Redis after all attempts")
-                    raise e
-        return False
-    
-    def _execute_with_retry(self, operation, *args, **kwargs):
-        """Выполнить операцию с повторными попытками"""
-        max_retries = 3
-        last_exception = None
-        
-        for attempt in range(max_retries):
-            try:
-                self._ensure_connection()
-                return operation(*args, **kwargs)
-            except (redis.ConnectionError, redis.TimeoutError, redis.ResponseError) as e:
-                last_exception = e
-                print(f"Redis operation failed (attempt {attempt + 1}/{max_retries}): {e}")
-                
-                if attempt < max_retries - 1:
-                    time.sleep(0.5 * (attempt + 1))
-                    try:
-                        self.redis = self._create_redis_connection()
-                    except:
-                        continue
-                else:
-                    print(f" Operation failed after {max_retries} attempts: {last_exception}")
-                    raise last_exception
-        
-        raise last_exception
 
-    def predict_task_duration(self, program_code: str, task_data: Dict = None, use_cache: bool = True) -> float:
-        """Предсказание времени выполнения задачи"""
-        # Создаем ключ для кэша
-        cache_key = hashlib.md5(program_code.encode()).hexdigest()
-        
-        # Проверяем кэш только если разрешено
-        if use_cache and cache_key in self.prediction_cache:
-            cached_time, timestamp = self.prediction_cache[cache_key]
-            if time.time() - timestamp < self.cache_ttl:
-                features = self.task_analyzer.extract_program_features(program_code)
-                print(f" Using cached prediction: {cached_time:.2f}s | Code: {features['code_length']} chars | "
-                      f"Functions: {features['function_count']} | Loops depth: {features['loop_depth']} | "
-                      f"Memory ops: {features['memory_operations']}")
-                return cached_time
-        
-        # Получаем исторические данные для похожих программ
-        historical_data = self._get_historical_execution_data(program_code)
-        
-        # Предсказываем время выполнения
-        predicted_time = self.task_analyzer.predict_execution_time(program_code, historical_data)
-        
-        # Сохраняем в кэш
-        self.prediction_cache[cache_key] = (predicted_time, time.time())
-        
-        features = self.task_analyzer.extract_program_features(program_code)
-        print(f" Predicted execution time: {predicted_time:.2f}s | Code: {features['code_length']} chars | "
-              f"Functions: {features['function_count']} | Loops depth: {features['loop_depth']} | "
-              f"Memory ops: {features['memory_operations']}")
-        
-        return predicted_time
-    
-    def _get_historical_execution_data(self, program_code: str) -> List[float]:
-        """Получение исторических данных выполнения для похожих программ"""
-        return []
-    
-    def estimate_memory_usage(self, program_code: str, task_data: Dict = None, use_cache: bool = True) -> float:
-        """Оценка использования памяти программой"""
-        # Создаем ключ для кэша памяти
-        cache_key = f"memory_{hashlib.md5(program_code.encode()).hexdigest()}"
-        
-        # Проверяем кэш только если разрешено
-        if use_cache and cache_key in self.prediction_cache:
-            cached_memory, timestamp = self.prediction_cache[cache_key]
-            if time.time() - timestamp < self.cache_ttl:
-                print(f" Using cached memory estimate: {cached_memory:.2f}MB")
-                return cached_memory
-        
-        base_memory = 50
-        
-        # Корректировка на основе размера кода
-        code_memory = len(program_code) / 1024
-        
-        # Корректировка на основе структур данных
-        features = self.task_analyzer.extract_program_features(program_code)
-        structures = features.get('data_structures', {})
-        
-        memory_adjustment = 0
-        memory_adjustment += structures.get('dataframes', 0) * 100
-        memory_adjustment += structures.get('arrays', 0) * 50
-        memory_adjustment += structures.get('lists', 0) * 10
-        memory_adjustment += structures.get('dicts', 0) * 15
-        
-        # Корректировка на библиотеки
-        libraries = features.get('library_usage', [])
-        for lib in libraries:
-            if lib in ['pandas', 'numpy']:
-                memory_adjustment += 200
-            elif lib in ['tensorflow', 'torch']:
-                memory_adjustment += 500
-        
-        total_memory = base_memory + code_memory + memory_adjustment
-        
-        # Сохраняем в кэш
-        self.prediction_cache[cache_key] = (total_memory, time.time())
-        
-        print(f"Estimated memory usage: {total_memory:.2f}MB")
-        return total_memory
-    
-    def add_program_task(self, node_id: str, program_code: str, task_data: Dict = None, use_cache: bool = True) -> str:
-        """Добавить задачу-программу в очередь с автоматическим предсказанием характеристик"""
-        if task_data is None:
-            task_data = {}
-        
-        # Предсказываем время выполнения и использование памяти
-        expected_duration = self.predict_task_duration(program_code, task_data, use_cache=use_cache)
-        memory_weight = self.estimate_memory_usage(program_code, task_data, use_cache=use_cache)
-        
-        # Добавляем программу в данные задачи
-        task_data['program_code'] = program_code
-        task_data['program_features'] = self.task_analyzer.extract_program_features(program_code)
-        
-        # Используем существующий метод для добавления задачи
-        return self.add_task_to_queue(
-            node_id, 
-            task_data, 
-            memory_weight=memory_weight,
-            expected_duration=expected_duration
-        )
-    
-    def add_complex_task(self, node_id: str, program_code: str, task_data: Dict = None) -> str:
-        """Добавить сложную задачу с автоматической разбивкой на подзадачи"""
-        if task_data is None:
-            task_data = {}
-        
-        # Анализируем необходимость разбивки
-        complexity = self.task_splitter.analyze_task_complexity(program_code)
-        
-        if not complexity['needs_splitting']:
-            print(f" Task doesn't need splitting (score: {complexity['split_score']:.2f})")
-            return self.add_program_task(node_id, program_code, task_data)
-        
-        print(f"Complex task detected (score: {complexity['split_score']:.2f}), splitting...")
-        
-        # Создаем составную задачу
-        composite_task_id = str(uuid.uuid4())
-        self.composite_tasks[composite_task_id] = {
-            'main_task_id': composite_task_id,
-            'original_code': program_code,
-            'subtasks': [],
-            'status': 'splitting',
+# ... (Здесь должны быть ваши классы TaskSplitter и TaskComplexityAnalyzer без изменений) ...
+
+class BioMedExecutor:
+    def __init__(self):
+        # Подключаем API транспорта
+        self.transport = MasterNodeTransport(broker_host='localhost', broker_port=1883)
+
+        # Логика разбиения
+        self.splitter = TaskSplitter()
+
+        # Реестр активных задач (вместо Redis храним состояние текущих вычислений в памяти)
+        # Структура: {
+        #   'task_uuid': {
+        #       'total_parts': 3,
+        #       'received_parts': {0: data, 1: data},
+        #       'params': {...}
+        #   }
+        # }
+        self.active_tasks = {}
+
+        # Флаг работы
+        self.running = False
+
+    def start(self):
+        print("[Master] Запуск системы...")
+        if self.transport.start():
+            self.running = True
+            print("[Master] Транспорт подключен.")
+            # Подписка на уведомления об отключении нод
+            self.transport.set_dead_nodes_callback(self._handle_dead_nodes)
+        else:
+            print("[Master Error] Не удалось подключиться к MQTT брокеру.")
+
+    def _handle_dead_nodes(self, dead_nodes_ids):
+        print(f"[Alert] Потеряна связь с нодами: {dead_nodes_ids}")
+        # Здесь можно добавить логику переназначения задач (re-queue), если нода умерла
+
+    def submit_task(self, program_code: str, params: dict = None):
+        """
+        Главный метод: Принимает задачу -> Разбивает -> Отправляет на ESP32
+        """
+        if not self.running:
+            print("[Error] Мастер не запущен.")
+            return
+
+        if params is None:
+            params = {}
+
+        task_id = str(uuid.uuid4())
+        print(f"\n[Task] Новая задача {task_id}. Анализ...")
+
+        # 1. Анализ и разбивка (используем ваш Splitter)
+        complexity = self.splitter.analyze_task_complexity(program_code)
+
+        if complexity.get('needs_splitting', False):
+            # Разбиваем на подзадачи
+            subtasks_list = self.splitter.split_complex_task(program_code, params)
+        else:
+            # Одна задача
+            subtasks_list = [{
+                'program_code': program_code,
+                'task_data': params,
+                'is_subtask': False
+            }]
+
+        total_parts = len(subtasks_list)
+        print(f"[Task] Задача разбита на {total_parts} частей.")
+
+        # 2. Регистрируем задачу в памяти, чтобы ждать ответы
+        self.active_tasks[task_id] = {
+            'total_parts': total_parts,
+            'received_parts': {},
+            'params': params,
             'created_at': time.time()
         }
-        
-        # Разбиваем на подзадачи
-        subtasks = self.task_splitter.split_complex_task(program_code, task_data)
-        
-        print(f" Split into {len(subtasks)} subtasks")
-        
-        # Добавляем подзадачи в очередь
-        subtask_ids = []
+
+        # 3. Отправка воркерам
+        self._distribute_subtasks(task_id, subtasks_list)
+
+        return task_id
+
+    def _distribute_subtasks(self, task_id, subtasks):
+        """Распределяет части задачи по доступным нодам"""
+        # Получаем список живых нод через API
+        nodes = self.transport.get_nodes_by_status("ready")
+        if not nodes:
+            nodes = self.transport.get_nodes_by_status("connected")
+
+        if not nodes:
+            print("[Error] Нет доступных воркеров! Задача висит.")
+            # В реальной системе тут нужна очередь ожидания
+            return
+
+        available_node_ids = [n['node_id'] for n in nodes]
+        worker_count = len(available_node_ids)
+
         for i, subtask in enumerate(subtasks):
-            subtask_data = subtask['task_data']
-            subtask_data['composite_task_id'] = composite_task_id
-            subtask_data['subtask_index'] = i
-            
-            subtask_id = self.add_program_task(
-                node_id, 
-                subtask['program_code'], 
-                subtask_data,
-                use_cache=False  # Отключаем кэш для подзадач
-            )
-            
-            subtask_ids.append(subtask_id)
-            
-            # Сохраняем информацию о подзадаче
-            self.composite_tasks[composite_task_id]['subtasks'].append({
-                'subtask_id': subtask_id,
-                'status': 'queued',
-                'index': i
-            })
-        
-        self.composite_tasks[composite_task_id]['status'] = 'distributed'
-        self.composite_tasks[composite_task_id]['subtask_ids'] = subtask_ids
-        
-        print(f" Composite task {composite_task_id} distributed with {len(subtask_ids)} subtasks")
-        return composite_task_id
-    
-    def check_composite_task_status(self, composite_task_id: str) -> Dict:
-        """Проверить статус составной задачи"""
-        if composite_task_id not in self.composite_tasks:
-            return {'status': 'not_found'}
-        
-        composite_task = self.composite_tasks[composite_task_id]
-        completed = 0
-        failed = 0
-        processing = 0
-        queued = 0
-        
-        for subtask in composite_task['subtasks']:
-            task_info_json = self.redis.get(f"task:{subtask['subtask_id']}:info")
-            if task_info_json:
-                task_info = json.loads(task_info_json)
-                status = task_info.get('status', 'unknown')
-                
-                if status == 'completed':
-                    completed += 1
-                elif status == 'failed':
-                    failed += 1
-                elif status == 'processing':
-                    processing += 1
-                else:
-                    queued += 1
-        
-        total = len(composite_task['subtasks'])
-        progress = (completed / total) * 100 if total > 0 else 0
-        
-        # Обновляем статус составной задачи
-        if completed == total:
-            composite_task['status'] = 'completed'
-        elif failed > 0:
-            composite_task['status'] = 'partial_failure'
-        elif processing > 0 or queued > 0:
-            composite_task['status'] = 'in_progress'
-        
-        return {
-            'composite_task_id': composite_task_id,
-            'status': composite_task['status'],
-            'progress': progress,
-            'subtasks_total': total,
-            'subtasks_completed': completed,
-            'subtasks_failed': failed,
-            'subtasks_processing': processing,
-            'subtasks_queued': queued
-        }
-    
-    def get_composite_task_results(self, composite_task_id: str) -> Dict:
-        """Получить результаты всех подзадач составной задачи"""
-        if composite_task_id not in self.composite_tasks:
-            return {'error': 'Composite task not found'}
-        
-        composite_task = self.composite_tasks[composite_task_id]
-        results = {}
-        
-        for subtask in composite_task['subtasks']:
-            task_info_json = self.redis.get(f"task:{subtask['subtask_id']}:info")
-            if task_info_json:
-                task_info = json.loads(task_info_json)
-                results[subtask['subtask_id']] = {
-                    'status': task_info.get('status', 'unknown'),
-                    'result': task_info.get('result'),
-                    'duration': task_info.get('actual_duration'),
-                    'subtask_data': task_info.get('data', {})
-                }
-        
-        return {
-            'composite_task_id': composite_task_id,
-            'original_task': composite_task['original_code'][:100] + "...",
-            'results': results,
-            'summary': {
-                'total_subtasks': len(composite_task['subtasks']),
-                'completed': len([r for r in results.values() if r['status'] == 'completed']),
-                'failed': len([r for r in results.values() if r['status'] == 'failed'])
-            }
-        }
+            # Простой Round-Robin распределитель
+            target_node = available_node_ids[i % worker_count]
 
-    # Остальные методы QueueTaskLoadBalancer остаются без изменений
-    def update_node_metrics(self, node_id: str, metrics: Dict):
-        def _update():
-            current_stats = self._get_node_execution_stats(node_id)
-            
-            metrics_data = {
-                'cpu_load': metrics.get('cpu_load', 0),
-                'memory_usage': metrics.get('memory_usage', 0),
-                'memory_capacity': metrics.get('memory_capacity', 1024),
-                'last_updated': time.time(),
-                'is_available': metrics.get('is_available', True),
-                'response_time': metrics.get('response_time', 0),
-                'queue_length': self.get_queue_length(node_id),
-                'queue_memory_usage': self.get_queue_memory_usage(node_id),
-                'queue_execution_time': self.get_queue_execution_time(node_id),
-                'avg_execution_time': current_stats.get('avg_execution_time', 0),
-                'tasks_processed': current_stats.get('tasks_processed', 0)
+            # Формируем пакет для ESP32
+            # ВАЖНО: ESP32 должна вернуть task_id и subtask_index в ответе!
+            payload = {
+                "task_id": task_id,
+                "subtask_index": i,
+                "program_code": subtask['program_code'],
+                "params": subtask['task_data'],
+                # Добавляем priority, так как API send_task его поддерживает
+                "priority": 5
             }
-            
-            self.redis.hset(self.nodes_key, node_id, json.dumps(metrics_data))
-            self._update_health_check(node_id)
-        
-        self._execute_with_retry(_update)
-    
-    def _update_health_check(self, node_id: str):
-        def _update():
-            health_key = f"{self.health_check_key_prefix}{node_id}"
-            self.redis.setex(health_key, 60, str(time.time()))
-        
-        self._execute_with_retry(_update)
-    
-    def check_node_health(self, node_id: str) -> bool:
-        def _check():
-            health_key = f"{self.health_check_key_prefix}{node_id}"
-            last_health = self.redis.get(health_key)
-            
-            if not last_health:
-                return False
-            
-            return time.time() - float(last_health) < 45
-        
-        try:
-            return self._execute_with_retry(_check)
-        except:
-            return False
-    
-    def auto_detect_failed_nodes(self) -> List[str]:
-        def _detect():
-            nodes_data = self.redis.hgetall(self.nodes_key)
-            failed_nodes = []
-            
-            for node_id, data_str in nodes_data.items():
-                data = json.loads(data_str)
-                
-                if not data.get('is_available', True):
-                    continue
-                
-                if not self.check_node_health(node_id):
-                    failed_nodes.append(node_id)
-            
-            for node_id in failed_nodes:
-                print(f"Auto-detected failed node: {node_id}")
-                self.mark_node_failed(node_id)
-            
-            return failed_nodes
-        
-        try:
-            return self._execute_with_retry(_detect)
-        except:
-            return []
-    
-    def get_queue_key(self, node_id: str) -> str:
-        return f"{self.queues_key_prefix}{node_id}"
-    
-    def get_queue_length(self, node_id: str) -> int:
-        def _get_length():
-            queue_key = self.get_queue_key(node_id)
-            return self.redis.llen(queue_key)
-        
-        try:
-            return self._execute_with_retry(_get_length)
-        except:
-            return 0
-    
-    def get_queue_memory_usage(self, node_id: str) -> float:
-        def _get_memory():
-            queue_key = self.get_queue_key(node_id)
-            tasks_json = self.redis.lrange(queue_key, 0, -1)
-            
-            total_memory = 0
-            for task_json in tasks_json:
-                try:
-                    task = json.loads(task_json)
-                    total_memory += task.get('memory_weight', 0)
-                except (json.JSONDecodeError, KeyError):
-                    continue
-            
-            return total_memory
-        
-        try:
-            return self._execute_with_retry(_get_memory)
-        except:
-            return 0.0
-    
-    def get_queue_execution_time(self, node_id: str) -> float:
-        def _get_time():
-            queue_key = self.get_queue_key(node_id)
-            tasks_json = self.redis.lrange(queue_key, 0, -1)
-            
-            total_time = 0
-            for task_json in tasks_json:
-                try:
-                    task = json.loads(task_json)
-                    total_time += task.get('expected_duration', 0)
-                except (json.JSONDecodeError, KeyError):
-                    continue
-            
-            return total_time
-        
-        try:
-            return self._execute_with_retry(_get_time)
-        except:
-            return 0.0
-    
-    def _get_node_execution_stats(self, node_id: str) -> Dict:
-        def _get_stats():
-            stats_key = f"{self.node_stats_key_prefix}{node_id}"
-            stats_json = self.redis.get(stats_key)
-            
-            if stats_json:
-                return json.loads(stats_json)
-            
-            return {
-                'avg_execution_time': 0,
-                'tasks_processed': 0,
-                'total_execution_time': 0,
-                'last_calculated': time.time()
-            }
-        
-        try:
-            return self._execute_with_retry(_get_stats)
-        except:
-            return {
-                'avg_execution_time': 0,
-                'tasks_processed': 0,
-                'total_execution_time': 0,
-                'last_calculated': time.time()
-            }
-    
-    def _update_node_execution_stats(self, node_id: str, execution_time: float):
-        def _update_stats():
-            stats = self._get_node_execution_stats(node_id)
-            
-            total_tasks = stats['tasks_processed'] + 1
-            total_time = stats['total_execution_time'] + execution_time
-            
-            stats.update({
-                'avg_execution_time': total_time / total_tasks if total_tasks > 0 else 0,
-                'tasks_processed': total_tasks,
-                'total_execution_time': total_time,
-                'last_calculated': time.time()
-            })
-            
-            stats_key = f"{self.node_stats_key_prefix}{node_id}"
-            self.redis.setex(stats_key, 86400, json.dumps(stats))
-        
-        try:
-            self._execute_with_retry(_update_stats)
-        except Exception as e:
-            print(f"Warning: Failed to update node stats: {e}")
-    
-    def calculate_node_score(self, node_data: Dict, current_queue_length: int, 
-                           strategy: str = 'balanced', task_memory: float = 0, 
-                           expected_duration: float = 0) -> float:
-        try:
-            max_queue_size = node_data.get('max_queue_size', 100)
-            max_queue_memory = node_data.get('max_queue_memory', 512)
-            current_memory_usage = node_data.get('queue_memory_usage', 0)
-            current_execution_time = node_data.get('queue_execution_time', 0)
-            
-            
-            avg_node_time = node_data.get('avg_execution_time', 0)
-            if avg_node_time > 0 and expected_duration > avg_node_time * 3:
-                return float('inf')
-            
-            if strategy == 'cpu':
-                score = node_data['cpu_load']
-            elif strategy == 'response_time':
-                score = node_data['response_time']
-            elif strategy == 'queue_length':
-                score = current_queue_length
-            elif strategy == 'memory_aware':
-                memory_usage_ratio = (current_memory_usage + task_memory) / max_queue_memory
-                cpu_ratio = node_data['cpu_load'] / 100
-                score = (memory_usage_ratio * 0.6) + (cpu_ratio * 0.4)
-            elif strategy == 'execution_time_aware':
-                queue_ratio = current_queue_length / max_queue_size
-                memory_ratio = (current_memory_usage + task_memory) / max_queue_memory
-                execution_ratio = min(node_data.get('avg_execution_time', 0) / 1000, 1.0)
-                current_time_ratio = (current_execution_time + expected_duration) / (max_queue_size * avg_node_time) if avg_node_time > 0 else 0
-                
-                score = (queue_ratio * 0.3) + (memory_ratio * 0.3) + (execution_ratio * 0.2) + (current_time_ratio * 0.2)
-            elif strategy == 'weighted_composite':
-                queue_ratio = current_queue_length / max_queue_size
-                memory_ratio = (current_memory_usage + task_memory) / max_queue_memory
-                cpu_ratio = node_data['cpu_load'] / 100
-                
-                time_penalty = 0
-                if avg_node_time > 0:
-                    historical_time_ratio = min(expected_duration / avg_node_time, 3.0) / 3.0
-                    queue_time_ratio = (current_execution_time + expected_duration) / (max_queue_size * avg_node_time * 2)
-                    time_penalty = (historical_time_ratio * 0.7) + (queue_time_ratio * 0.3)
-                
-                score = (queue_ratio * 0.3) + (memory_ratio * 0.3) + (cpu_ratio * 0.2) + (time_penalty * 0.2)
-            else:
-                queue_ratio = current_queue_length / max_queue_size
-                memory_ratio = (current_memory_usage + task_memory) / max_queue_memory
-                cpu_ratio = node_data['cpu_load'] / 100
-                
-                score = (queue_ratio * 0.4) + (memory_ratio * 0.3) + (cpu_ratio * 0.3)
-            
-            return score
-        except Exception as e:
-            print(f"Error calculating node score: {e}")
-            return float('inf')
-    
-    def get_best_node(self, strategy='balanced', task_memory: float = 0, 
-                     expected_duration: float = 0, check_failures: bool = False) -> Optional[str]:
-        def _find_best_node():
-            if check_failures:
-                self.auto_detect_failed_nodes()
-            
-            nodes_data = self.redis.hgetall(self.nodes_key)
-            if not nodes_data:
-                return None
-            
-            available_nodes = []
-            
-            for node_id, data_str in nodes_data.items():
-                data = json.loads(data_str)
-                
-                if not data.get('is_available', True):
-                    continue
-                
-                if time.time() - data['last_updated'] > 30:
-                    pass
-                
-                current_queue_length = self.get_queue_length(node_id)
-                
-                score = self.calculate_node_score(data, current_queue_length, strategy, task_memory, expected_duration)
-                
-                available_nodes.append((node_id, score, data, current_queue_length))
-            
-            if not available_nodes:
-                return None
-            
-            best_node = min(available_nodes, key=lambda x: x[1])
-            return best_node[0]
-        
-        try:
-            return self._execute_with_retry(_find_best_node)
-        except:
-            return None
-    
-    def add_task_to_queue(self, node_id: str, task_data: Dict, 
-                         memory_weight: float = 0, expected_duration: float = 0) -> str:
-        def _add_task():
-            if not self._is_node_available(node_id):
-                new_node_id = self.get_best_node('balanced', memory_weight, expected_duration, check_failures=False)
-                if new_node_id:
-                    print(f"Node {node_id} is not available, redirecting task to {new_node_id}")
-                    node_id_actual = new_node_id
-                else:
-                    raise Exception(f"No available nodes for task. Original node {node_id} is down.")
-            else:
-                node_id_actual = node_id
-            
-            task_id = str(uuid.uuid4())
-            task = {
-                'task_id': task_id,
-                'data': task_data,
-                'created_at': time.time(),
-                'node_id': node_id_actual,
-                'status': 'queued',
-                'memory_weight': memory_weight,
-                'expected_duration': expected_duration
-            }
-            
-            queue_key = self.get_queue_key(node_id_actual)
-            self.redis.rpush(queue_key, json.dumps(task))
-            
-            self._update_node_queue_metrics(node_id_actual)
-            
-            self.redis.setex(f"task:{task_id}:info", 86400, json.dumps({
-                'node_id': node_id_actual,
-                'status': 'queued',
-                'created_at': task['created_at'],
-                'memory_weight': memory_weight,
-                'expected_duration': expected_duration
-            }))
-            
-            print(f"Task {task_id} assigned to {node_id_actual} (memory: {memory_weight:.2f}MB, duration: {expected_duration:.2f}s)")
-            
-            return task_id
-        
-        return self._execute_with_retry(_add_task)
-    
-    def _is_node_available(self, node_id: str) -> bool:
-        def _check_available():
-            node_data = self.redis.hget(self.nodes_key, node_id)
-            if not node_data:
-                return False
-            
-            data = json.loads(node_data)
-            return data.get('is_available', True) and self.check_node_health(node_id)
-        
-        try:
-            return self._execute_with_retry(_check_available)
-        except:
-            return False
-    
-    def get_next_task(self, node_id: str) -> Optional[Dict]:
-        def _get_task():
-            if not self._is_node_available(node_id):
-                print(f"Node {node_id} is not available, cannot get next task")
-                return None
-                
-            queue_key = self.get_queue_key(node_id)
-            task_json = self.redis.lpop(queue_key)
-            
-            if task_json:
-                task = json.loads(task_json)
-                task['status'] = 'processing'
-                task['started_at'] = time.time()
-                
-                self.redis.setex(f"task:{task['task_id']}:info", 86400, json.dumps({
-                    'node_id': node_id,
-                    'status': 'processing',
-                    'created_at': task['created_at'],
-                    'started_at': task['started_at'],
-                    'memory_weight': task.get('memory_weight', 0),
-                    'expected_duration': task.get('expected_duration', 0)
-                }))
-                
-                self._update_node_queue_metrics(node_id)
-                
-                return task
-            
-            return None
-        
-        try:
-            return self._execute_with_retry(_get_task)
-        except:
-            return None
-    
-    def complete_task(self, task_id: str, result: Dict = None, actual_duration: float = None):
-        def _complete():
-            task_info_json = self.redis.get(f"task:{task_id}:info")
-            if task_info_json:
-                task_info = json.loads(task_info_json)
-                node_id = task_info.get('node_id')
-                
-                # Исправление: создаем локальную переменную для использования в замыкании
-                calculated_duration = actual_duration
-                if calculated_duration is None and task_info.get('started_at'):
-                    calculated_duration = time.time() - task_info['started_at']
-                
-                if calculated_duration is not None and calculated_duration > 0:
-                    self._update_node_execution_stats(node_id, calculated_duration)
-                
-                task_info['status'] = 'completed'
-                task_info['completed_at'] = time.time()
-                task_info['result'] = result
-                if calculated_duration is not None:
-                    task_info['actual_duration'] = calculated_duration
-                
-                self.redis.setex(f"task:{task_id}:info", 3600, json.dumps(task_info))
-                
-                if node_id:
-                    self._update_node_queue_metrics(node_id)
-        
-        try:
-            self._execute_with_retry(_complete)
-        except Exception as e:
-            print(f"Warning: Failed to complete task {task_id}: {e}")
 
-    
-    def fail_task(self, task_id: str, error: str = None):
-        def _fail():
-            task_info_json = self.redis.get(f"task:{task_id}:info")
-            if task_info_json:
-                task_info = json.loads(task_info_json)
-                node_id = task_info.get('node_id')
-                
-                task_info['status'] = 'failed'
-                task_info['failed_at'] = time.time()
-                task_info['error'] = error
-                
-                self.redis.setex(f"task:{task_id}:info", 3600, json.dumps(task_info))
-                
-                if node_id:
-                    self._update_node_queue_metrics(node_id)
-        
-        try:
-            self._execute_with_retry(_fail)
-        except Exception as e:
-            print(f"Warning: Failed to mark task {task_id} as failed: {e}")
-    
-    def mark_node_failed(self, node_id: str, auto_redistribute: bool = True):
-        def _mark_failed():
-            print(f"Marking node {node_id} as failed...")
-            
-            current_data = self.redis.hget(self.nodes_key, node_id)
-            if current_data:
-                metrics = json.loads(current_data)
-                metrics['is_available'] = False
-                metrics['last_updated'] = time.time()
-                self.redis.hset(self.nodes_key, node_id, json.dumps(metrics))
-            
-            failed_queue_info = {
-                'node_id': node_id,
-                'failed_at': time.time(),
-                'queue_length': self.get_queue_length(node_id),
-                'total_memory_usage': self.get_queue_memory_usage(node_id),
-                'total_execution_time': self.get_queue_execution_time(node_id),
-                'redistributed': False
-            }
-            self.redis.hset(self.failed_queues_key, node_id, json.dumps(failed_queue_info))
-            
-            if auto_redistribute:
-                self._redistribute_failed_queue(node_id)
-        
-        self._execute_with_retry(_mark_failed)
-    
-    def _redistribute_failed_queue(self, failed_node_id: str):
-        def _redistribute():
-            print(f"Redistributing tasks from failed node {failed_node_id}...")
-            
-            queue_key = self.get_queue_key(failed_node_id)
-            tasks_json = self.redis.lrange(queue_key, 0, -1)
-            
-            if not tasks_json:
-                self._mark_queue_redistributed(failed_node_id)
-                print(f"No tasks to redistribute from node {failed_node_id}")
-                return
-            
-            redistributed_count = 0
-            failed_count = 0
-            
-            for task_json in tasks_json:
-                task = json.loads(task_json)
-                task_id = task['task_id']
-                memory_weight = task.get('memory_weight', 0)
-                expected_duration = task.get('expected_duration', 0)
-                
-                new_node_id = self.get_best_node('weighted_composite', memory_weight, 
-                                               expected_duration, check_failures=False)
-                
-                if new_node_id:
-                    new_queue_key = self.get_queue_key(new_node_id)
-                    self.redis.rpush(new_queue_key, task_json)
-                    
-                    task_info = {
-                        'node_id': new_node_id,
-                        'status': 'queued',
-                        'created_at': task['created_at'],
-                        'original_node': failed_node_id,
-                        'redistributed_at': time.time(),
-                        'memory_weight': memory_weight,
-                        'expected_duration': expected_duration
-                    }
-                    self.redis.setex(f"task:{task_id}:info", 86400, json.dumps(task_info))
-                    
-                    redistributed_count += 1
-                    self._update_node_queue_metrics(new_node_id)
-                    
-                    print(f"Task {task_id} redistributed from {failed_node_id} to {new_node_id} (memory: {memory_weight}MB, duration: {expected_duration}s)")
-                else:
-                    print(f"Warning: No available nodes for task {task_id} (memory: {memory_weight}MB, duration: {expected_duration}s)")
-                    failed_count += 1
-            
-            self.redis.delete(queue_key)
-            self._mark_queue_redistributed(failed_node_id, redistributed_count)
-            
-            print(f"Redistribution completed: {redistributed_count} tasks redistributed, {failed_count} failed from node {failed_node_id}")
-        
-        self._execute_with_retry(_redistribute)
-    
-    def _mark_queue_redistributed(self, node_id: str, redistributed_count: int = 0):
-        def _mark():
-            failed_queue_info = {
-                'node_id': node_id,
-                'failed_at': time.time(),
-                'queue_length': 0,
-                'redistributed': True,
-                'redistributed_at': time.time(),
-                'redistributed_count': redistributed_count
-            }
-            self.redis.hset(self.failed_queues_key, node_id, json.dumps(failed_queue_info))
-        
-        self._execute_with_retry(_mark)
-    
-    def _update_node_queue_metrics(self, node_id: str):
-        def _update_metrics():
-            current_data = self.redis.hget(self.nodes_key, node_id)
-            if current_data:
-                metrics = json.loads(current_data)
-                metrics['queue_length'] = self.get_queue_length(node_id)
-                metrics['queue_memory_usage'] = self.get_queue_memory_usage(node_id)
-                metrics['queue_execution_time'] = self.get_queue_execution_time(node_id)
-                metrics['last_updated'] = time.time()
-                self.redis.hset(self.nodes_key, node_id, json.dumps(metrics))
-        
-        try:
-            self._execute_with_retry(_update_metrics)
-        except Exception as e:
-            print(f"Warning: Failed to update node metrics for {node_id}: {e}")
-    
-    def get_failed_queues_info(self) -> Dict:
-        def _get_failed():
-            failed_queues = self.redis.hgetall(self.failed_queues_key)
-            result = {}
-            
-            for node_id, data_str in failed_queues.items():
-                result[node_id] = json.loads(data_str)
-            
-            return result
-        
-        try:
-            return self._execute_with_retry(_get_failed)
-        except:
-            return {}
-    
-    def recover_node(self, node_id: str) -> bool:
-        def _recover():
-            node_data = self.redis.hget(self.nodes_key, node_id)
-            if not node_data:
-                return False
-            
-            data = json.loads(node_data)
-            data['is_available'] = True
-            data['last_updated'] = time.time()
-            
-            self.redis.hset(self.nodes_key, node_id, json.dumps(data))
-            self._update_health_check(node_id)
-            self.redis.hdel(self.failed_queues_key, node_id)
-            
-            print(f"Node {node_id} recovered successfully")
-            return True
-        
-        try:
-            return self._execute_with_retry(_recover)
-        except:
-            return False
-    
-    def get_node_queue_info(self, node_id: str) -> Dict:
-        def _get_info():
-            queue_key = self.get_queue_key(node_id)
-            tasks_json = self.redis.lrange(queue_key, 0, -1)
-            
-            tasks = []
-            total_memory = 0
-            total_time = 0
-            for task_json in tasks_json:
-                task = json.loads(task_json)
-                memory_weight = task.get('memory_weight', 0)
-                expected_duration = task.get('expected_duration', 0)
-                tasks.append({
-                    'task_id': task['task_id'],
-                    'created_at': task['created_at'],
-                    'status': 'queued',
-                    'memory_weight': memory_weight,
-                    'expected_duration': expected_duration
-                })
-                total_memory += memory_weight
-                total_time += expected_duration
-            
-            return {
-                'node_id': node_id,
-                'queue_length': len(tasks),
-                'total_memory_usage': total_memory,
-                'total_execution_time': total_time,
-                'tasks': tasks
-            }
-        
-        try:
-            return self._execute_with_retry(_get_info)
-        except:
-            return {
-                'node_id': node_id,
-                'queue_length': 0,
-                'total_memory_usage': 0,
-                'total_execution_time': 0,
-                'tasks': []
-            }
-    
-    def get_all_queues_info(self) -> Dict:
-        def _get_all():
-            nodes_data = self.redis.hgetall(self.nodes_key)
-            queues_info = {}
-            
-            for node_id in nodes_data.keys():
-                queues_info[node_id] = self.get_node_queue_info(node_id)
-            
-            return queues_info
-        
-        try:
-            return self._execute_with_retry(_get_all)
-        except:
-            return {}
+            self.transport.send_task(target_node, payload, priority=5)
+            print(f" -> Часть {i} отправлена на {target_node}")
 
-    def process_all_tasks(self, node_ids: List[str] = None):
-        if node_ids is None:
-            nodes_data = self.redis.hgetall(self.nodes_key)
-            node_ids = [node_id for node_id in nodes_data.keys() 
-                    if self._is_node_available(node_id)]
-        
-        print(f"\n=== Processing ALL tasks on nodes: {node_ids} ===")
-        total_processed = 0
-        
-        for node_id in node_ids:
-            if not self._is_node_available(node_id):
-                print(f"Skipping unavailable node: {node_id}")
-                continue
-                
-            node_processed = 0
-            print(f"\nProcessing tasks on node {node_id}:")
-            
-            while True:
-                task = self.get_next_task(node_id)
-                if not task:
-                    break
-                    
-                memory = task.get('memory_weight', 0)
-                expected_duration = task.get('expected_duration', 0)
-                
-                print(f"  Processing task {task['task_id']} (memory: {memory}MB, expected: {expected_duration}s)")
-                
-                # Имитация обработки задачи - используем предсказанное время
-                processing_time = min(expected_duration / 10, 0.5)
-                time.sleep(processing_time)
-                
-                # Передаем actual_duration явно
-                self.complete_task(task['task_id'], {'result': 'success'}, actual_duration=expected_duration)
-                node_processed += 1
-                total_processed += 1
-            
-            print(f"Completed {node_processed} tasks on node {node_id}")
-        
-        print(f"\n=== TOTAL PROCESSED: {total_processed} tasks ===")
-        return total_processed
-
-    def get_total_tasks_count(self) -> int:
-        queues_info = self.get_all_queues_info()
-        total = 0
-        for node_id, info in queues_info.items():
-            total += info['queue_length']
-        return total
-
-    def clear_all_queues(self):
-        def _clear():
-            for node_id in ["worker_1", "worker_2", "worker_3"]:
-                queue_key = self.get_queue_key(node_id)
-                self.redis.delete(queue_key)
-            self.redis.delete(self.nodes_key)
-            self.redis.delete(self.failed_queues_key)
-            print("All queues cleared")
-        
+    def loop(self):
+        """Основной цикл обработки результатов"""
         try:
-            self._execute_with_retry(_clear)
-        except Exception as e:
-            print(f"Warning: Failed to clear queues: {e}")
+            while self.running:
+                # ВЫЗОВ ФУНКЦИИ СБОРА ОТВЕТОВ
+                process_worker_responses(self.transport, self.active_tasks)
 
+                time.sleep(0.5)  # Не грузим CPU
+        except KeyboardInterrupt:
+            print("[Master] Остановка...")
+
+
+# --- ЗАПУСК ---
+if __name__ == "__main__":
+    executor = BioMedExecutor()
+    executor.start()
+
+    # Даем время на подключение
+    time.sleep(2)
+
+    # Пример отправки задачи
+    code = "def heavy_computation(): return 42"
+    executor.submit_task(code, {"type": "bio_signal_analysis"})
+
+    # Запускаем бесконечный цикл ожидания ответов
+    executor.loop()
 # Примеры программ разной сложности (остаются без изменений)
 SIMPLE_TASKS = [
    # Простая задача - вычисление суммы

@@ -1,500 +1,388 @@
-from django.shortcuts import render, redirect, get_object_or_404
-from django.contrib.auth import login, authenticate, logout
-from django.contrib.auth.decorators import login_required, user_passes_test
+"""
+Django views для работы через FastAPI бэкенд
+Все операции с БД идут только через HTTP API
+"""
+from django.shortcuts import render, redirect
 from django.contrib import messages
-from .forms import UserRegistrationForm, AdminProfileForm, OrdinaryUserProfileForm
-from .models import User
 from django.contrib.auth.decorators import login_required
-from .forms import TaskSubmissionForm
-import uuid
-import json
-import os
-from django.contrib import messages
-from django.utils import timezone
-from django.conf import settings
-import psycopg2
-from psycopg2.extras import RealDictCursor
-from django.core.paginator import Paginator
+from django.views.decorators.http import require_http_methods
+from django.contrib.sessions.backends.db import SessionStore
+from django.http import HttpResponse
+import httpx
+from typing import Optional
+
+# Предполагается, что api_client.py находится в той же директории
+from .api_client import api_client
 
 
-def get_db_connection():
-    """
-    Создает подключение к PostgreSQL базе данных
-    """
-    db_config = settings.DATABASES['default']
-    return psycopg2.connect(
-        dbname=db_config['NAME'],
-        user=db_config['USER'],
-        password=db_config['PASSWORD'],
-        host=db_config['HOST'],
-        port=db_config['PORT']
-    )
+# ==================== HELPER FUNCTIONS ====================
 
+def get_user_from_session(request):
+    """Получение данных пользователя из сессии"""
+    user_id = request.session.get('user_id')
+    if not user_id:
+        return None
 
-def save_task_to_database(task_data, file_content):
-    """
-    Сохраняет задачу в PostgreSQL базу данных
-    
-    Args:
-        task_data: Словарь с данными задачи
-        file_content: Содержимое Python файла (строка)
-    
-    Returns:
-        bool: True если успешно, False если ошибка
-    """
     try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        # SQL запрос для вставки данных
-        insert_query = """
-        INSERT INTO tasks 
-            (task_id, username, email, user_id_in_app, user_type, 
-             task_payload, file_path, original_filename, python_file, timestamp_utc)
-        VALUES 
-            (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """
-        
-        # Конвертируем содержимое файла в байты
-        file_bytes = file_content.encode('utf-8')
-        
-        # Данные для вставки
-        values = (
-            task_data['task_id'],
-            task_data['submitted_by']['username'],
-            task_data['submitted_by']['email'],
-            task_data['submitted_by']['user_id_in_app'],
-            task_data['user_type'],
-            task_data['task_payload'],
-            task_data['file_path'],
-            task_data['original_filename'],
-            psycopg2.Binary(file_bytes),  # Сохраняем как BYTEA
-            task_data['timestamp_utc']
-        )
-        
-        cursor.execute(insert_query, values)
-        conn.commit()
-        
-        cursor.close()
-        conn.close()
-        
-        return True
-        
-    except Exception as e:
-        print(f"Ошибка при сохранении в БД: {e}")
-        return False
-
-
-def get_user_tasks(user_id, limit=None, offset=0):
-    """
-    Получает список задач пользователя из PostgreSQL
-    
-    Args:
-        user_id: ID пользователя
-        limit: Количество записей (None = все)
-        offset: Смещение для пагинации
-    
-    Returns:
-        list: Список задач с результатами
-    """
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor(cursor_factory=RealDictCursor)
-        
-        # Запрос с LEFT JOIN для получения последнего результата
-        query = """
-        SELECT 
-            t.id,
-            t.task_id,
-            t.original_filename,
-            t.task_payload,
-            t.timestamp_utc,
-            tr.status,
-            tr.solution,
-            tr.execution_time_seconds,
-            tr.error_message,
-            tr.output,
-            tr.created_at as result_created_at
-        FROM tasks t
-        LEFT JOIN LATERAL (
-            SELECT * FROM task_results
-            WHERE task_id = t.task_id
-            ORDER BY created_at DESC
-            LIMIT 1
-        ) tr ON true
-        WHERE t.user_id_in_app = %s
-        ORDER BY t.timestamp_utc DESC
-        """
-        
-        if limit:
-            query += f" LIMIT {limit} OFFSET {offset}"
-        
-        cursor.execute(query, (user_id,))
-        tasks = cursor.fetchall()
-        
-        cursor.close()
-        conn.close()
-        
-        return tasks
-        
-    except Exception as e:
-        print(f"Ошибка при получении задач: {e}")
-        return []
-
-
-def get_task_details(task_id, user_id):
-    """
-    Получает детальную информацию о задаче
-    
-    Args:
-        task_id: UUID задачи
-        user_id: ID пользователя (для проверки прав)
-    
-    Returns:
-        dict: Детали задачи или None
-    """
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor(cursor_factory=RealDictCursor)
-        
-        # Получаем задачу с проверкой прав доступа
-        query = """
-        SELECT 
-            t.*,
-            convert_from(t.python_file, 'UTF8') as python_code
-        FROM tasks t
-        WHERE t.task_id = %s AND t.user_id_in_app = %s
-        """
-        
-        cursor.execute(query, (task_id, user_id))
-        task = cursor.fetchone()
-        
-        if not task:
-            cursor.close()
-            conn.close()
-            return None
-        
-        # Получаем все результаты выполнения
-        results_query = """
-        SELECT * FROM task_results
-        WHERE task_id = %s
-        ORDER BY created_at DESC
-        """
-        
-        cursor.execute(results_query, (task_id,))
-        results = cursor.fetchall()
-        
-        cursor.close()
-        conn.close()
-        
-        return {
-            'task': dict(task),
-            'results': [dict(r) for r in results]
-        }
-        
-    except Exception as e:
-        print(f"Ошибка при получении деталей задачи: {e}")
+        user_data = api_client.get_user_full(user_id)
+        return user_data
+    except httpx.HTTPError:
         return None
 
 
-def get_user_statistics(user_id):
-    """
-    Получает статистику по задачам пользователя
-    
-    Args:
-        user_id: ID пользователя
-    
-    Returns:
-        dict: Статистика
-    """
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor(cursor_factory=RealDictCursor)
-        
-        query = """
-        SELECT 
-            COUNT(DISTINCT t.task_id) as total_tasks,
-            COUNT(CASE WHEN tr.status = 'completed' THEN 1 END) as completed_tasks,
-            COUNT(CASE WHEN tr.status = 'failed' THEN 1 END) as failed_tasks,
-            COUNT(CASE WHEN tr.status = 'running' THEN 1 END) as running_tasks,
-            COUNT(CASE WHEN tr.status = 'pending' THEN 1 END) as pending_tasks,
-            ROUND(AVG(CASE WHEN tr.status = 'completed' THEN tr.execution_time_seconds END), 3) 
-                as avg_execution_time
-        FROM tasks t
-        LEFT JOIN task_results tr ON t.task_id = tr.task_id
-        WHERE t.user_id_in_app = %s
-        """
-        
-        cursor.execute(query, (user_id,))
-        stats = cursor.fetchone()
-        
-        cursor.close()
-        conn.close()
-        
-        return dict(stats) if stats else {}
-        
-    except Exception as e:
-        print(f"Ошибка при получении статистики: {e}")
-        return {}
+def login_required_api(view_func):
+    """Декоратор для проверки авторизации через API"""
+
+    def wrapper(request, *args, **kwargs):
+        user = get_user_from_session(request)
+        if not user:
+            messages.error(request, 'Необходимо войти в систему')
+            return redirect('login')
+        request.user_api = user
+        return view_func(request, *args, **kwargs)
+
+    return wrapper
 
 
-def is_admin(user):
-    return user.is_authenticated and user.user_type == 'admin'
+def admin_required(view_func):
+    """Декоратор для проверки прав администратора"""
+
+    @login_required_api
+    def wrapper(request, *args, **kwargs):
+        if request.user_api['user_type'] != 'admin':
+            return redirect('access_denied')
+        return view_func(request, *args, **kwargs)
+
+    return wrapper
 
 
-def is_ordinary(user):
-    return user.is_authenticated and user.user_type == 'ordinary'
+def ordinary_user_required(view_func):
+    """Декоратор для проверки прав обычного пользователя"""
+
+    @login_required_api
+    def wrapper(request, *args, **kwargs):
+        if request.user_api['user_type'] != 'user':
+            return redirect('access_denied')
+        return view_func(request, *args, **kwargs)
+
+    return wrapper
 
 
+# ==================== AUTHENTICATION VIEWS ====================
+
+@require_http_methods(["GET", "POST"])
 def register_view(request):
+    """Регистрация нового пользователя"""
     if request.method == 'POST':
-        form = UserRegistrationForm(request.POST)
-        if form.is_valid():
-            user = form.save()
-            login(request, user)
-            messages.success(request, f'Добро пожаловать, {user.username}!')
+        username = request.POST.get('username')
+        email = request.POST.get('email')
+        password = request.POST.get('password1')
+        password2 = request.POST.get('password2')
+        user_type = request.POST.get('user_type', 'ordinary')
 
-            if user.user_type == 'admin':
+        # Валидация
+        if password != password2:
+            messages.error(request, 'Пароли не совпадают')
+            return render(request, 'accounts/register.html')
+
+        try:
+            if user_type == 'admin':
+                result = api_client.register_admin(
+                    username=username,
+                    email=email,
+                    password=password,
+                    department=request.POST.get('department'),
+                    phone=request.POST.get('phone'),
+                )
+            else:
+                result = api_client.register_user(
+                    username=username,
+                    email=email,
+                    password=password,
+                    bio=request.POST.get('bio'),
+                    phone=request.POST.get('phone'),
+                    city=request.POST.get('city'),
+                )
+
+            # Автоматический вход после регистрации
+            request.session['user_id'] = result['id']
+            request.session['username'] = result['username']
+            request.session['user_type'] = result['user_type']
+
+            messages.success(request, f'Добро пожаловать, {username}!')
+
+            if user_type == 'admin':
                 return redirect('admin_dashboard')
             else:
                 return redirect('user_dashboard')
-    else:
-        form = UserRegistrationForm()
 
-    return render(request, 'accounts/register.html', {'form': form})
+        except httpx.HTTPError as e:
+            messages.error(request, f'Ошибка регистрации: {str(e)}')
+
+    return render(request, 'accounts/register.html')
 
 
+@require_http_methods(["GET", "POST"])
 def login_view(request):
+    """Вход в систему"""
     if request.method == 'POST':
         username = request.POST.get('username')
         password = request.POST.get('password')
-        user = authenticate(request, username=username, password=password)
 
-        if user is not None:
-            login(request, user)
-            messages.success(request, f'Добро пожаловать, {user.username}!')
+        try:
+            # Получаем данные пользователя через API
+            auth_info = api_client.get_auth_info(username)
 
-            if user.user_type == 'admin':
-                return redirect('admin_dashboard')
+            # Проверяем пароль (в реальном проекте используйте хеширование!)
+            if auth_info['password'] == password:
+                # Сохраняем в сессию
+                request.session['user_id'] = auth_info['id']
+                request.session['username'] = auth_info['username']
+                request.session['user_type'] = auth_info['user_type']
+
+                messages.success(request, f'Добро пожаловать, {username}!')
+
+                if auth_info['user_type'] == 'admin':
+                    return redirect('admin_dashboard')
+                else:
+                    return redirect('user_dashboard')
             else:
-                return redirect('user_dashboard')
-        else:
-            messages.error(request, 'Неверное имя пользователя или пароль')
+                messages.error(request, 'Неверное имя пользователя или пароль')
+
+        except httpx.HTTPError:
+            messages.error(request, 'Пользователь не найден')
 
     return render(request, 'accounts/login.html')
 
 
-@login_required
 def logout_view(request):
-    logout(request)
+    """Выход из системы"""
+    request.session.flush()
     messages.info(request, 'Вы вышли из системы')
     return redirect('login')
 
 
-@login_required
-@user_passes_test(is_admin, login_url='/access-denied/')
-def admin_dashboard(request):
-    profile = request.user.admin_profile
-    all_users = User.objects.filter(user_type='ordinary').count()
-    all_admins = User.objects.filter(user_type='admin').count()
+# ==================== ADMIN VIEWS ====================
 
+@admin_required
+def admin_dashboard(request):
+    """Панель администратора"""
+    user_data = request.user_api
+
+    # Здесь можно добавить статистику через API
     context = {
-        'profile': profile,
-        'total_users': all_users,
-        'total_admins': all_admins,
+        'user': user_data,
+        'profile': user_data.get('admin', {}),
+        'total_users': 0,  # TODO: добавить endpoint в API
+        'total_admins': 0,  # TODO: добавить endpoint в API
     }
     return render(request, 'accounts/admin_dashboard.html', context)
 
 
-@login_required
-@user_passes_test(is_admin, login_url='/access-denied/')
+@admin_required
+@require_http_methods(["GET", "POST"])
 def admin_profile_edit(request):
-    profile = request.user.admin_profile
+    """Редактирование профиля администратора"""
+    user_data = request.user_api
 
     if request.method == 'POST':
-        form = AdminProfileForm(request.POST, instance=profile)
-        if form.is_valid():
-            form.save()
+        try:
+            update_data = {
+                'department': request.POST.get('department'),
+                'phone': request.POST.get('phone'),
+                'permissions_level': int(request.POST.get('permissions_level', 1)),
+                'access_code': request.POST.get('access_code'),
+            }
+
+            api_client.update_user(user_data['id'], **update_data)
             messages.success(request, 'Профиль обновлен!')
             return redirect('admin_dashboard')
-    else:
-        form = AdminProfileForm(instance=profile)
 
-    return render(request, 'accounts/admin_profile_edit.html', {'form': form})
-
-
-@login_required
-@user_passes_test(is_ordinary, login_url='/access-denied/')
-def user_dashboard(request):
-    profile = request.user.ordinary_profile
-    
-    # Получаем статистику пользователя
-    statistics = get_user_statistics(request.user.id)
-    
-    # Получаем последние 5 задач
-    recent_tasks = get_user_tasks(request.user.id, limit=5)
+        except httpx.HTTPError as e:
+            messages.error(request, f'Ошибка обновления: {str(e)}')
 
     context = {
-        'profile': profile,
-        'statistics': statistics,
+        'user': user_data,
+        'profile': user_data.get('admin', {}),
+    }
+    return render(request, 'accounts/admin_profile_edit.html', context)
+
+
+# ==================== USER VIEWS ====================
+
+@ordinary_user_required
+def user_dashboard(request):
+    """Панель пользователя"""
+    user_data = request.user_api
+
+    try:
+        # Получаем задачи пользователя
+        tasks = api_client.list_user_tasks(user_data['id'])
+        recent_tasks = tasks[:5] if tasks else []
+
+        # Вычисляем статистику
+        statistics = {
+            'total_tasks': len(tasks),
+            'completed_tasks': sum(1 for t in tasks if t.get('status') == 'completed'),
+            'failed_tasks': sum(1 for t in tasks if t.get('status') == 'failed'),
+            'running_tasks': sum(1 for t in tasks if t.get('status') == 'running'),
+            'pending_tasks': sum(1 for t in tasks if t.get('status') == 'pending'),
+        }
+    except httpx.HTTPError:
+        recent_tasks = []
+        statistics = {}
+
+    context = {
+        'user': user_data,
+        'profile': user_data.get('details', {}),
         'recent_tasks': recent_tasks,
+        'statistics': statistics,
     }
     return render(request, 'accounts/user_dashboard.html', context)
 
 
-@login_required
-@user_passes_test(is_ordinary, login_url='/access-denied/')
+@ordinary_user_required
+@require_http_methods(["GET", "POST"])
 def user_profile_edit(request):
-    profile = request.user.ordinary_profile
+    """Редактирование профиля пользователя"""
+    user_data = request.user_api
 
     if request.method == 'POST':
-        form = OrdinaryUserProfileForm(request.POST, request.FILES, instance=profile)
-        if form.is_valid():
-            form.save()
-            messages.success(request, 'Профиль обновлен!')
-            return redirect('user_dashboard')
-    else:
-        form = OrdinaryUserProfileForm(instance=profile)
-
-    return render(request, 'accounts/user_profile_edit.html', {'form': form})
-
-
-def access_denied(request):
-    return render(request, 'accounts/access_denied.html', status=403)
-
-
-@login_required
-def submit_task_view(request):
-    """
-    Отображает страницу для отправки задачи с Python-кодом,
-    сохраняет файл на диск и в PostgreSQL базу данных.
-    """
-    if request.method == 'POST':
-        form = TaskSubmissionForm(request.POST, request.FILES)
-        if form.is_valid():
-            user = request.user
-            task_id = str(uuid.uuid4())
-            
-            # Получаем данные из формы
-            filename = form.cleaned_data['filename']
-            python_code = form.cleaned_data.get('python_code')
-            python_file = form.cleaned_data.get('python_file')
-            
-            # Определяем код для сохранения
-            if python_file:
-                code_content = python_file.read().decode('utf-8')
-            else:
-                code_content = python_code
-            
-            # Создаем директорию для задач, если её нет
-            tasks_dir = os.path.join(settings.BASE_DIR, 'user_tasks')
-            if not os.path.exists(tasks_dir):
-                os.makedirs(tasks_dir)
-            
-            # Создаем поддиректорию для текущего пользователя
-            user_tasks_dir = os.path.join(tasks_dir, f'user_{user.id}')
-            if not os.path.exists(user_tasks_dir):
-                os.makedirs(user_tasks_dir)
-            
-            # Формируем полный путь к файлу
-            safe_filename = f"{task_id}_{filename}"
-            file_path = os.path.join(user_tasks_dir, safe_filename)
-            
-            # Сохраняем Python файл на диск
-            with open(file_path, 'w', encoding='utf-8') as f:
-                f.write(code_content)
-            
-            # Собираем все данные в словарь
-            task_dict = {
-                'task_id': task_id,
-                'submitted_by': {
-                    'username': user.username,
-                    'email': user.email,
-                    'user_id_in_app': user.id
-                },
-                'user_type': user.user_type,
-                'task_payload': safe_filename,
-                'file_path': file_path,
-                'original_filename': filename,
-                'timestamp_utc': timezone.now().isoformat()
+        try:
+            update_data = {
+                'bio': request.POST.get('bio'),
+                'phone': request.POST.get('phone'),
+                'city': request.POST.get('city'),
+                'birth_date': request.POST.get('birth_date'),
+                'subscription_active': request.POST.get('subscription_active') == 'on',
             }
 
-            # Преобразуем словарь в JSON-строку
-            json_output = json.dumps(task_dict, indent=4, ensure_ascii=False)
+            # Обработка аватара отдельно
+            if 'avatar' in request.FILES:
+                api_client.upload_avatar(user_data['id'], request.FILES['avatar'])
 
-            # Выводим результат в консоль
-            print("----------- НОВАЯ ЗАДАЧА -----------")
-            print(json_output)
-            print("---------------------------------")
-            
-            # Сохраняем JSON метаданные в файл
-            json_file_path = os.path.join(user_tasks_dir, f"{task_id}_metadata.json")
-            with open(json_file_path, 'w', encoding='utf-8') as json_file:
-                json_file.write(json_output)
-            
-            # Сохраняем задачу в PostgreSQL
-            db_saved = save_task_to_database(task_dict, code_content)
-            
-            if db_saved:
-                success_message = (
-                    f"✅ Задача с ID {task_id} успешно отправлена на обработку!"
-                )
-                messages.success(request, success_message)
-                print("✅ Задача успешно сохранена в PostgreSQL")
-            else:
-                warning_message = (
-                    f"⚠️ Задача {task_id} сохранена локально, но возникла ошибка при сохранении в БД."
-                )
-                messages.warning(request, warning_message)
-                print("⚠️ Ошибка при сохранении в PostgreSQL")
-            
-            return redirect('my_tasks')
-    else:
-        form = TaskSubmissionForm()
+            api_client.update_user(user_data['id'], **update_data)
+            messages.success(request, 'Профиль обновлен!')
+            return redirect('user_dashboard')
 
-    return render(request, 'accounts/submit_task.html', {'form': form})
+        except httpx.HTTPError as e:
+            messages.error(request, f'Ошибка обновления: {str(e)}')
 
-
-@login_required
-@user_passes_test(is_ordinary, login_url='/access-denied/')
-def my_tasks_view(request):
-    """
-    Отображает список всех задач пользователя с пагинацией
-    """
-    # Получаем все задачи пользователя
-    all_tasks = get_user_tasks(request.user.id)
-    
-    # Пагинация
-    paginator = Paginator(all_tasks, 10)  # 10 задач на страницу
-    page_number = request.GET.get('page', 1)
-    tasks_page = paginator.get_page(page_number)
-    
-    # Статистика
-    statistics = get_user_statistics(request.user.id)
-    
     context = {
-        'tasks': tasks_page,
+        'user': user_data,
+        'profile': user_data.get('details', {}),
+    }
+    return render(request, 'accounts/user_profile_edit.html', context)
+
+
+# ==================== TASK VIEWS ====================
+
+@ordinary_user_required
+@require_http_methods(["GET", "POST"])
+def submit_task_view(request):
+    """Создание новой задачи"""
+    if request.method == 'POST':
+        filename = request.POST.get('filename', 'script.py')
+        python_code = request.POST.get('python_code')
+        python_file = request.FILES.get('python_file')
+
+        try:
+            # Создаем временный файл с кодом
+            files_to_upload = []
+
+            if python_file:
+                files_to_upload.append(python_file)
+            elif python_code:
+                # Создаем временный файл из кода
+                from django.core.files.uploadedfile import SimpleUploadedFile
+                temp_file = SimpleUploadedFile(
+                    filename,
+                    python_code.encode('utf-8'),
+                    content_type='text/x-python'
+                )
+                files_to_upload.append(temp_file)
+
+            # Создаем задачу через API
+            task = api_client.create_task(
+                user_id=request.user_api['id'],
+                name=filename,
+                description=f"Python script: {filename}",
+                files=files_to_upload if files_to_upload else None
+            )
+
+            messages.success(request, f'✅ Задача {task["name"]} успешно создана!')
+            return redirect('my_tasks')
+
+        except httpx.HTTPError as e:
+            messages.error(request, f'Ошибка создания задачи: {str(e)}')
+
+    return render(request, 'accounts/submit_task.html')
+
+
+@ordinary_user_required
+def my_tasks_view(request):
+    """Список задач пользователя"""
+    try:
+        tasks = api_client.list_user_tasks(request.user_api['id'])
+
+        # Статистика
+        statistics = {
+            'total_tasks': len(tasks),
+            'completed_tasks': sum(1 for t in tasks if t.get('status') == 'completed'),
+            'failed_tasks': sum(1 for t in tasks if t.get('status') == 'failed'),
+            'running_tasks': sum(1 for t in tasks if t.get('status') == 'running'),
+            'pending_tasks': sum(1 for t in tasks if t.get('status') == 'pending'),
+        }
+    except httpx.HTTPError:
+        tasks = []
+        statistics = {}
+
+    context = {
+        'tasks': tasks,
         'statistics': statistics,
     }
-    
     return render(request, 'accounts/my_tasks.html', context)
 
 
-@login_required
-@user_passes_test(is_ordinary, login_url='/access-denied/')
-def task_detail_view(request, task_id):
-    """
-    Отображает детальную информацию о задаче
-    """
-    task_details = get_task_details(task_id, request.user.id)
-    
-    if not task_details:
-        messages.error(request, 'Задача не найдена или у вас нет прав для её просмотра')
+@ordinary_user_required
+def task_detail_view(request, task_id: int):
+    """Детали задачи"""
+    try:
+        # Получаем список всех задач и находим нужную
+        tasks = api_client.list_user_tasks(request.user_api['id'])
+        task = next((t for t in tasks if t['id'] == task_id), None)
+
+        if not task:
+            messages.error(request, 'Задача не найдена')
+            return redirect('my_tasks')
+
+        # Получаем файлы
+        input_files = api_client.get_input_files(task_id)
+        result_files = api_client.get_result_files(task_id)
+
+        context = {
+            'task': task,
+            'input_files': input_files,
+            'result_files': result_files,
+        }
+        return render(request, 'accounts/task_detail.html', context)
+
+    except httpx.HTTPError as e:
+        messages.error(request, f'Ошибка загрузки задачи: {str(e)}')
         return redirect('my_tasks')
-    
-    context = {
-        'task': task_details['task'],
-        'results': task_details['results'],
-    }
-    
-    return render(request, 'accounts/task_detail.html', context)
+
+
+# ==================== UTILITY VIEWS ====================
+
+def access_denied(request):
+    """Страница отказа в доступе"""
+    return render(request, 'accounts/access_denied.html', status=403)
+
+
+def health_check(request):
+    """Проверка состояния системы"""
+    try:
+        api_status = api_client.health_check()
+        return HttpResponse(f"Django: OK, API: {api_status}", status=200)
+    except:
+        return HttpResponse("Django: OK, API: ERROR", status=500)
